@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:skyrim-awakened:interface-receipt:1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "kind", "request", "actor", "playthrough", "state"],
+  "properties": {
+    "version": {"const": 1},
+    "kind": {"enum": ["world-action", "utterance"]},
+    "request": {"$ref": "#/$defs/id"},
+    "actor": {"$ref": "#/$defs/id"},
+    "playthrough": {"$ref": "#/$defs/id"},
+    "utterance": {"$ref": "#/$defs/id"},
+    "state": {"enum": ["requested", "accepted", "in-progress", "completed", "failed", "canceled"]},
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source", "event"],
+      "properties": {
+        "source": {"enum": ["engine", "playback"]},
+        "event": {"$ref": "#/$defs/id"}
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"state": {"const": "completed"}}},
+      "then": {"required": ["evidence"]},
+      "else": {"not": {"required": ["evidence"]}}
+    },
+    {
+      "if": {"properties": {"kind": {"const": "utterance"}}},
+      "then": {
+        "required": ["utterance"],
+        "properties": {"evidence": {"properties": {"source": {"const": "playback"}}}}
+      },
+      "else": {
+        "not": {"required": ["utterance"]},
+        "properties": {"evidence": {"properties": {"source": {"const": "engine"}}}}
+      }
+    }
+  ],
+  "$defs": {
+    "id": {"type": "string", "pattern": "^[a-z][a-z0-9_-]{0,63}$"}
+  }
+}
