@@ -6,8 +6,9 @@
     let
       system = "x86_64-linux";
       pkgs = import nixpkgs { inherit system; };
+      mkSourceShell = pkgs.mkShell.override { stdenv = pkgs.llvmPackages_21.stdenv; };
     in {
-      devShells.${system}.default = pkgs.mkShell {
+      devShells.${system}.default = mkSourceShell {
         packages = with pkgs; [
           cargo rustc rustfmt clippy _7zz git pkg-config shellcheck
           (python3.withPackages (p: [ p.jsonschema p.rfc3339-validator ]))

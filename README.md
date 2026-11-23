@@ -6,7 +6,7 @@ The complete intended game combines a curated third-party modlist with a local A
 
 ## Included source
 
-- `src/skyforge/` — Rust Skyforge installer source and Cargo lockfile, as currently maintained for the Linux/Proton/MO2 workflow. Its `Cargo.toml` declares `GPL-3.0-or-later` because of libloot. It is a public-source snapshot whose local absolute CLI defaults were converted to relative defaults. **This edited public snapshot has not been independently built or tested as a portable installer**; the tested v0.0.3 playable profile remains in the separate private workspace.
+- `src/skyforge/` — Rust Skyforge installer source and Cargo lockfile for the Linux/Proton/MO2 workflow. Its `Cargo.toml` declares `GPL-3.0-or-later` because of libloot. The public source snapshot uses relative CLI defaults. Locked source checks and synthetic installer tests are available. Portable installation from public inputs remains unqualified; the documented v0.0.3 profile is in the separate private workspace.
 - `docs/` — the Core architecture, rights boundaries, integration inventory and v0.0.3 verification status.
 
 See [licensing](LICENSING.md) before reusing code or proposing derivative patches. Original code under `src/skyforge` is GPL-3.0-or-later; original documentation is CC BY 4.0. Neither license grants rights in separate third-party mods.

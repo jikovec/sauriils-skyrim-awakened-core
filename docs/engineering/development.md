@@ -10,7 +10,7 @@ nix develop --no-update-lock-file --command bash scripts/check lint origin/main
 nix develop --no-update-lock-file --command bash scripts/check verify origin/main
 ```
 
-The commands run inside an x86_64 Linux shell using the checked-in Cargo lockfile, Rust 1.95.0, libloot 0.29.7 and 7-Zip for synthetic archive tests. The first invocation can obtain pinned Nix packages and crates. Add Cargo's offline arguments when using an independently prepared cache. Set an isolated `CARGO_TARGET_DIR` to bound disk use or compare clean builds. Source checks need no Nexus account, licensed game, local model, save or live database. Formatter checks apply to changed Rust files. Legacy whole-tree formatting and Clippy warnings remain visible separately. A source build and synthetic tests do not prove a portable installed modlist.
+The commands run inside an x86_64 Linux shell using the checked-in Cargo lockfile, Rust 1.95.0, LLVM 21, libloot 0.29.7 and 7-Zip for synthetic archive tests. The first invocation can obtain pinned Nix packages and crates. Set `CARGO_NET_OFFLINE=true` with an independently prepared cache and use an isolated `CARGO_TARGET_DIR` to bound disk use or compare clean builds. Source checks need no Nexus account, licensed game, local model, save or live database. The formatter gates new and previously formatted changed files. Whole-file output for legacy formatting and existing Clippy warnings remains advisory. A source build and synthetic tests do not prove a portable installed modlist.
 
 | Environment | Supported verification and evidence |
 | --- | --- |

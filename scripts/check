@@ -2,7 +2,6 @@
 set -euo pipefail
 cd -- "$(dirname -- "$0")/.."
 
-
 manifest=src/skyforge/Cargo.toml
 action=${1:-verify}
 base=${2:-origin/main}
@@ -24,9 +23,18 @@ case "$action" in
     lint)
         shellcheck scripts/check
         git rev-parse --verify "$base^{commit}" >/dev/null
+        git diff --check "$base"
         changed=$(git diff --name-only --diff-filter=ACMR "$base" -- '*.rs')
         while IFS= read -r file; do
-            [[ -z $file ]] || rustfmt --check --edition 2021 --config skip_children=true -- "$file"
+            [[ -n $file ]] || continue
+            if git cat-file -e "$base:$file" 2>/dev/null &&
+                ! git show "$base:$file" | rustfmt --check --edition 2021 >/dev/null; then
+                if ! rustfmt --check --edition 2021 --config skip_children=true -- "$file" >/dev/null; then
+                    printf 'Whole-file rustfmt advisory for legacy formatting: %s\n' "$file"
+                fi
+            else
+                rustfmt --check --edition 2021 --config skip_children=true -- "$file"
+            fi
         done <<< "$changed"
         cargo clippy --locked --all-targets --manifest-path "$manifest"
         ;;
