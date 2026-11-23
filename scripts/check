@@ -27,8 +27,12 @@ case "$action" in
         changed=$(git diff --name-only --diff-filter=ACMR "$base" -- '*.rs')
         while IFS= read -r file; do
             [[ -n $file ]] || continue
-            if git cat-file -e "$base:$file" 2>/dev/null &&
-                ! git show "$base:$file" | rustfmt --check --edition 2021 >/dev/null; then
+            baseline=
+            if git cat-file -e "$base:$file" 2>/dev/null; then
+                baseline=$(git show "$base:$file")
+            fi
+            formatted=$(printf '%s\n' "$baseline" | rustfmt --emit stdout --edition 2021 --config skip_children=true)
+            if [[ $baseline != "$formatted" ]]; then
                 if ! rustfmt --check --edition 2021 --config skip_children=true -- "$file" >/dev/null; then
                     printf 'Whole-file rustfmt advisory for legacy formatting: %s\n' "$file"
                 fi
