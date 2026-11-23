@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+set -euo pipefail
+cd -- "$(dirname -- "$0")/.."
+
+
+manifest=src/skyforge/Cargo.toml
+action=${1:-verify}
+base=${2:-origin/main}
+
+case "$action" in
+    doctor)
+        rustc --version
+        cargo --version
+        cc --version
+        command -v 7zz rustfmt cargo-clippy shellcheck
+        python3 -c 'import jsonschema'
+        ;;
+    build)
+        cargo build --locked --manifest-path "$manifest"
+        ;;
+    test)
+        cargo test --locked --manifest-path "$manifest"
+        ;;
+    lint)
+        shellcheck scripts/check
+        git rev-parse --verify "$base^{commit}" >/dev/null
+        changed=$(git diff --name-only --diff-filter=ACMR "$base" -- '*.rs')
+        while IFS= read -r file; do
+            [[ -z $file ]] || rustfmt --check --edition 2021 --config skip_children=true -- "$file"
+        done <<< "$changed"
+        cargo clippy --locked --all-targets --manifest-path "$manifest"
+        ;;
+    static)
+        python3 scripts/verify-public.py
+        python3 scripts/verify-contracts.py
+        ;;
+    verify)
+        bash scripts/check doctor
+        bash scripts/check static
+        bash scripts/check lint "$base"
+        bash scripts/check build
+        bash scripts/check test
+        ;;
+    *)
+        printf 'Usage: bash scripts/check [doctor|build|test|lint|static|verify] [base-ref]\n' >&2
+        exit 2
+        ;;
+esac

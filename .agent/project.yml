@@ -1,0 +1,8 @@
+version: 1
+project: Sauriil’s Skyrim Awakened
+repository: jikovec/sauriils-skyrim-awakened-core
+default_branch: main
+domain: core-engineering
+entrypoint: AGENTS.md
+orientation: docs/engineering/README.md
+architecture: docs/architecture/README.md

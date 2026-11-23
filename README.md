@@ -16,3 +16,7 @@ See [licensing](LICENSING.md) before reusing code or proposing derivative patche
 No Skyrim game assets, Bethesda files, external mod archives, MO2 installation, personal saves, NPC voices/voice models, local CHIM databases, private conversations, credentials, or uncleared CHIM/HerikaServer derivative code. Source-only publication does **not** mean the full v0.0.3 runtime is publicly released or gameplay-qualified.
 
 The exact complete list of third-party references and integration package names is in the [Collection repository](https://github.com/jikovec/sauriils-skyrim-awakened). Contributions of original code or documentation are welcome through pull requests after reading [CONTRIBUTING.md](CONTRIBUTING.md).
+
+## Engineering foundation
+
+Start with [architecture](docs/architecture/README.md), [contributor orientation](docs/engineering/README.md) or [locked development checks](docs/engineering/development.md).
