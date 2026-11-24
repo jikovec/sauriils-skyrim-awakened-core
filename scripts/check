@@ -11,8 +11,8 @@ case "$action" in
         rustc --version
         cargo --version
         cc --version
-        command -v 7zz rustfmt cargo-clippy shellcheck
-        python3 -c 'import jsonschema'
+        command -v 7zz rustfmt cargo-clippy shellcheck actionlint
+        python3 -c 'import jsonschema, yaml'
         ;;
     build)
         cargo build --locked --manifest-path "$manifest"
@@ -22,6 +22,7 @@ case "$action" in
         ;;
     lint)
         shellcheck scripts/check
+        actionlint
         git rev-parse --verify "$base^{commit}" >/dev/null
         git diff --check "$base"
         changed=$(git diff --name-only --diff-filter=ACMR "$base" -- '*.rs')
@@ -45,6 +46,7 @@ case "$action" in
     static)
         python3 scripts/verify-public.py
         python3 scripts/verify-contracts.py
+        python3 scripts/verify-workflows.py
         ;;
     verify)
         bash scripts/check doctor

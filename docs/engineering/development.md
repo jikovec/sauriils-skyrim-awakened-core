@@ -14,7 +14,7 @@ The commands run inside an x86_64 Linux shell using the checked-in Cargo lockfil
 
 | Environment | Supported verification and evidence |
 | --- | --- |
-| Public source and fixtures | Workflow runs the same entrypoint with locked dependencies, bounded job time and read-only repository token. Review code, inventory and formats before attributing a hosted result to a PR head. |
+| Public source and fixtures | Workflow runs the same entrypoint with locked dependencies, bounded job time and read-only repository token. The `main` ruleset requires its result, and the entrypoint checks the workflow against the [reviewed trust boundary](hosted-controls.md). Review code, inventory and formats before attributing a hosted result to a PR head. |
 | Disposable integration | Use a component-owned prefix/profile, distinct backend binding/database and licensed fixtures only where required. Test fresh and migrated schemas, recovery, queue pressure and cancellation. |
 | Licensed candidate | Record exact Skyrim/SKSE/Address Library/Proton/MO2, plugin hashes, Profile/load order, backend/schema, model and measurement settings. Verify load, start/save/reload, quests, speech/perception, NPC state and sustained gameplay independently. |
 | Owner gameplay | Owner acceptance is its own observation. Hosting, source merge and runtime promotion require distinct authority and proof. |
