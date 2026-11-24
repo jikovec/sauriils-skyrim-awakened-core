@@ -536,27 +536,22 @@ fn stamp(file: &File) -> std::io::Result<(Stamp, bool)> {
 pub struct BoundArchive {
     file: File,
     stamp: Stamp,
+    shown: String,
     pub sha256: String,
     pub size: u64,
 }
 
 impl BoundArchive {
-    pub fn open(path: &Path, approved: &LockedFile) -> Result<Self> {
+    /// Open and hash the archive. Nothing is approved yet.
+    pub fn read(path: &Path) -> Result<Self> {
         let shown = path
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default();
-        let hex =
-            |d: &&str| d.len() == 64 && d.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'));
-        let Some(want) = approved.sha256.as_deref().filter(hex) else {
-            return refuse(
-                RefusalCode::UnapprovedIdentity,
-                format!("{shown}: the lockfile holds no SHA-256 for this archive"),
-            );
-        };
+        // Non-blocking, so a pipe at the archive path is refused instead of waited on.
         let file = match OpenOptions::new()
             .read(true)
-            .custom_flags(libc::O_NOFOLLOW)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
             .open(path)
         {
             Ok(file) => file,
@@ -592,24 +587,46 @@ impl BoundArchive {
                 format!("{shown}: changed while it was being verified"),
             );
         }
-        if sha256 != want {
+        Ok(BoundArchive {
+            file,
+            stamp: before,
+            shown,
+            sha256,
+            size: offset,
+        })
+    }
+
+    /// The bytes that were read are the bytes the lockfile approves.
+    pub fn approve(&self, approved: &LockedFile) -> Result<()> {
+        let shown = &self.shown;
+        let hex =
+            |d: &&str| d.len() == 64 && d.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'));
+        let Some(want) = approved.sha256.as_deref().filter(hex) else {
+            return refuse(
+                RefusalCode::UnapprovedIdentity,
+                format!("{shown}: the lockfile holds no SHA-256 for this archive"),
+            );
+        };
+        if self.sha256 != want {
             return refuse(
                 RefusalCode::DigestMismatch,
-                format!("{shown}: approved SHA-256 {want}, found {sha256}"),
+                format!("{shown}: approved SHA-256 {want}, found {}", self.sha256),
             );
         }
-        if approved.size.is_some_and(|size| size != offset) {
+        if approved.size.is_some_and(|size| size != self.size) {
             return refuse(
                 RefusalCode::UnapprovedIdentity,
                 format!("{shown}: the lockfile size disagrees with its own SHA-256"),
             );
         }
-        Ok(BoundArchive {
-            file,
-            stamp: before,
-            sha256,
-            size: offset,
-        })
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub fn open(path: &Path, approved: &LockedFile) -> Result<Self> {
+        let archive = Self::read(path)?;
+        archive.approve(approved)?;
+        Ok(archive)
     }
 
     /// The archive is still the file that was verified, with no write since.
@@ -709,12 +726,11 @@ const SYSTEM_ROOTS: &[&str] = &[
     "/bin",
     "/sbin",
     "/etc",
-    "/opt",
-    "/proc",
-    "/sys",
-    "/dev",
     "/run/current-system",
 ];
+
+/// The only device files an extractor may read. `/dev/shm` and terminals stay out of reach.
+const DEVICES: &[&str] = &["/dev/zero", "/dev/urandom", "/dev/random"];
 
 /// A Landlock ruleset for one extractor run: write only below `writable`; read the system
 /// roots, `readable` (the archive and the tool directories) and nothing else. The extractor
@@ -795,6 +811,9 @@ fn landlock(writable: &Path, readable: &[&Path]) -> std::io::Result<(OwnedFd, i6
     {
         allow(root, read)?;
     }
+    for path in DEVICES.iter().map(Path::new).filter(|p| p.exists()) {
+        allow(path, FS_READ_FILE)?;
+    }
     for path in readable {
         allow(path, read)?;
     }
@@ -807,6 +826,113 @@ fn landlock(writable: &Path, readable: &[&Path]) -> std::io::Result<(OwnedFd, i6
         handled & !(FS_EXECUTE | FS_MAKE_CHAR | FS_MAKE_BLOCK | FS_MAKE_SOCK | FS_MAKE_FIFO),
     )?;
     Ok((ruleset, abi))
+}
+
+/// A seccomp filter for the extractor. Landlock governs files; this refuses what Landlock
+/// does not reach: starting another process, opening any socket (network or the desktop
+/// session bus), signalling or tracing other processes, the kernel keyring, and new
+/// namespaces. Mode and owner changes report success and do nothing, because Landlock cannot
+/// confine them to staging and inspection resets modes afterwards. Threads stay available.
+#[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+fn syscall_filter() -> Vec<libc::sock_filter> {
+    #[cfg(target_arch = "x86_64")]
+    const ARCH: u32 = 0xC000_003E; // AUDIT_ARCH_X86_64
+    #[cfg(target_arch = "aarch64")]
+    const ARCH: u32 = 0xC000_00B7; // AUDIT_ARCH_AARCH64
+    let refuse: &[libc::c_long] = &[
+        #[cfg(target_arch = "x86_64")]
+        libc::SYS_fork,
+        #[cfg(target_arch = "x86_64")]
+        libc::SYS_vfork,
+        libc::SYS_clone3,
+        libc::SYS_socket,
+        libc::SYS_socketpair,
+        libc::SYS_io_uring_setup,
+        libc::SYS_kill,
+        libc::SYS_tkill,
+        libc::SYS_tgkill,
+        libc::SYS_rt_sigqueueinfo,
+        libc::SYS_rt_tgsigqueueinfo,
+        libc::SYS_pidfd_send_signal,
+        libc::SYS_ptrace,
+        libc::SYS_process_vm_readv,
+        libc::SYS_process_vm_writev,
+        libc::SYS_unshare,
+        libc::SYS_setns,
+        libc::SYS_keyctl,
+        libc::SYS_add_key,
+        libc::SYS_request_key,
+        libc::SYS_bpf,
+        libc::SYS_perf_event_open,
+        libc::SYS_userfaultfd,
+    ];
+    let ignore: &[libc::c_long] = &[
+        #[cfg(target_arch = "x86_64")]
+        libc::SYS_chmod,
+        #[cfg(target_arch = "x86_64")]
+        libc::SYS_chown,
+        #[cfg(target_arch = "x86_64")]
+        libc::SYS_lchown,
+        libc::SYS_fchmod,
+        libc::SYS_fchmodat,
+        452, // fchmodat2
+        libc::SYS_fchown,
+        libc::SYS_fchownat,
+    ];
+    let stmt = |code: u32, k: u32| libc::sock_filter {
+        code: code as u16,
+        jt: 0,
+        jf: 0,
+        k,
+    };
+    let jump = |code: u32, k: u32, jt: u8, jf: u8| libc::sock_filter {
+        code: code as u16,
+        jt,
+        jf,
+        k,
+    };
+    let (load, test, ret) = (
+        libc::BPF_LD | libc::BPF_W | libc::BPF_ABS,
+        libc::BPF_JMP | libc::BPF_K,
+        libc::BPF_RET | libc::BPF_K,
+    );
+    let errno = |e: i32| libc::SECCOMP_RET_ERRNO | (e as u32 & libc::SECCOMP_RET_DATA);
+    // Offsets into seccomp_data: nr at 0, arch at 4, the low half of args[0] at 16.
+    let mut filter = vec![
+        stmt(load, 4),
+        jump(test | libc::BPF_JEQ, ARCH, 1, 0),
+        stmt(ret, libc::SECCOMP_RET_KILL_PROCESS),
+        stmt(load, 0),
+    ];
+    // The x32 numbering would slip past the checks below.
+    #[cfg(target_arch = "x86_64")]
+    filter.extend([
+        jump(test | libc::BPF_JGE, 0x4000_0000, 0, 1),
+        stmt(ret, libc::SECCOMP_RET_KILL_PROCESS),
+    ]);
+    for nr in refuse {
+        filter.push(jump(test | libc::BPF_JEQ, *nr as u32, 0, 1));
+        filter.push(stmt(ret, errno(libc::EPERM)));
+    }
+    for nr in ignore {
+        filter.push(jump(test | libc::BPF_JEQ, *nr as u32, 0, 1));
+        filter.push(stmt(ret, errno(0)));
+    }
+    // clone is allowed only for a new thread of the same process.
+    filter.extend([
+        jump(test | libc::BPF_JEQ, libc::SYS_clone as u32, 0, 4),
+        stmt(load, 16),
+        jump(test | libc::BPF_JSET, libc::CLONE_THREAD as u32, 1, 0),
+        stmt(ret, errno(libc::EPERM)),
+        stmt(ret, libc::SECCOMP_RET_ALLOW),
+        stmt(ret, libc::SECCOMP_RET_ALLOW),
+    ]);
+    filter
+}
+
+#[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+fn syscall_filter() -> Vec<libc::sock_filter> {
+    Vec::new()
 }
 
 struct Sandbox {
@@ -888,6 +1014,12 @@ fn restrict(cmd: &mut Command, keep: RawFd, limits: &Limits, ruleset: Option<Raw
         .filter_map(|k| std::env::var_os(k).map(|v| (*k, v)))
         .collect();
     cmd.env_clear().envs(kept);
+    // Built before the fork: the child only passes the finished program to the kernel.
+    let filter = if ruleset.is_some() {
+        syscall_filter()
+    } else {
+        Vec::new()
+    };
     // SAFETY: the closure runs between fork and exec and makes only async-signal-safe calls.
     unsafe {
         cmd.pre_exec(move || {
@@ -898,6 +1030,15 @@ fn restrict(cmd: &mut Command, keep: RawFd, limits: &Limits, ruleset: Option<Raw
                     Err(std::io::Error::last_os_error())
                 }
             };
+            // Every descriptor this process holds closes at exec, then the archive alone is
+            // kept. A kernel without close_range leaves the standard library's own
+            // close-on-exec flags in force.
+            libc::syscall(
+                libc::SYS_close_range,
+                3u32,
+                u32::MAX,
+                libc::CLOSE_RANGE_CLOEXEC,
+            );
             check(libc::fcntl(keep, libc::F_SETFD, 0) == 0)?;
             for (resource, value) in [
                 (libc::RLIMIT_FSIZE, file_bytes),
@@ -917,6 +1058,19 @@ fn restrict(cmd: &mut Command, keep: RawFd, limits: &Limits, ruleset: Option<Raw
             if let Some(ruleset) = ruleset {
                 check(libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) == 0)?;
                 check(libc::syscall(libc::SYS_landlock_restrict_self, ruleset, 0u32) == 0)?;
+                if !filter.is_empty() {
+                    let program = libc::sock_fprog {
+                        len: filter.len() as libc::c_ushort,
+                        filter: filter.as_ptr() as *mut libc::sock_filter,
+                    };
+                    check(
+                        libc::prctl(
+                            libc::PR_SET_SECCOMP,
+                            libc::SECCOMP_MODE_FILTER,
+                            &program as *const libc::sock_fprog,
+                        ) == 0,
+                    )?;
+                }
             }
             Ok(())
         });
@@ -1057,10 +1211,11 @@ pub fn extract(
     let (seven_tool, unar_tool) = (resolve_tool(tool("7zz")), resolve_tool(tool("unar")));
     let archive_path = PathBuf::from(format!("/proc/self/fd/{}", archive.file.as_raw_fd()));
     let mut readable: Vec<&Path> = vec![&archive_path];
+    // Only a tool that exists has a directory to make readable.
     readable.extend(
         [&seven_tool, &unar_tool]
             .into_iter()
-            .filter(|t| t.is_absolute())
+            .filter(|t| t.is_absolute() && t.is_file())
             .filter_map(|t| t.parent()),
     );
     let sandbox = Sandbox::new(policy.confinement, dest, &readable)?;
@@ -1396,6 +1551,10 @@ pub fn recover_dir(parent: &Path, name: &str) -> Result<()> {
 /// Put the assembled directory in place. An existing folder is exchanged atomically, so there
 /// is no moment without a usable mod folder. Returns the method used.
 pub fn activate_dir(parent: &Path, name: &str) -> Result<&'static str> {
+    activate_dir_with(parent, name, true)
+}
+
+fn activate_dir_with(parent: &Path, name: &str, exchange: bool) -> Result<&'static str> {
     let (new, old, dest) = (
         assembly_dir(parent, name),
         temporary(parent, name, "old"),
@@ -1408,18 +1567,21 @@ pub fn activate_dir(parent: &Path, name: &str) -> Result<&'static str> {
     let c = |p: &Path| std::ffi::CString::new(p.as_os_str().as_encoded_bytes());
     let (from, to) = (c(&new)?, c(&dest)?);
     // SAFETY: both paths are valid C strings for the duration of the call.
-    let exchanged = unsafe {
-        libc::syscall(
-            libc::SYS_renameat2,
-            libc::AT_FDCWD,
-            from.as_ptr(),
-            libc::AT_FDCWD,
-            to.as_ptr(),
-            libc::RENAME_EXCHANGE,
-        )
-    } == 0;
+    let exchanged = exchange
+        && unsafe {
+            libc::syscall(
+                libc::SYS_renameat2,
+                libc::AT_FDCWD,
+                from.as_ptr(),
+                libc::AT_FDCWD,
+                to.as_ptr(),
+                libc::RENAME_EXCHANGE,
+            )
+        } == 0;
+    // Once the new folder is in place the install has happened. A leftover old folder is
+    // cleared by `recover_dir` on the next run and never turns the result into a failure.
     if exchanged {
-        remove_tree(&new)?;
+        remove_tree(&new).ok();
         return Ok("exchange");
     }
     // Filesystems without an atomic exchange: keep the old folder until the new one is in place.
@@ -1428,7 +1590,7 @@ pub fn activate_dir(parent: &Path, name: &str) -> Result<&'static str> {
         std::fs::rename(&old, &dest)?;
         return Err(error.into());
     }
-    remove_tree(&old)?;
+    remove_tree(&old).ok();
     Ok("replace")
 }
 
@@ -1521,7 +1683,13 @@ pub struct Receipt {
     pub activation: Option<ActivationRecord>,
     /// Set once admission has begun; a receipt is written only then.
     #[serde(skip)]
+    pub started: bool,
+    /// The staging directory to clear when the decision is recorded.
+    #[serde(skip)]
     pub staging: Option<PathBuf>,
+    /// Local directories and the labels that replace them in recorded text.
+    #[serde(skip)]
+    hidden: Vec<(String, &'static str)>,
 }
 
 impl Receipt {
@@ -1538,7 +1706,15 @@ impl Receipt {
             .enumerate()
             .map(|(index, f)| ArchiveRecord {
                 index,
-                name: f.display_name.clone(),
+                // A local source is displayed by its path; the receipt keeps the file name only.
+                name: if f.source == "local" {
+                    Path::new(&f.display_name)
+                        .file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_default()
+                } else {
+                    f.display_name.clone()
+                },
                 file_name: Path::new(f.file_name.as_deref().unwrap_or(""))
                     .file_name()
                     .map(|n| n.to_string_lossy().into_owned())
@@ -1570,32 +1746,52 @@ impl Receipt {
             plan: None,
             executables: Vec::new(),
             activation: None,
+            started: false,
             staging: None,
+            hidden: Vec::new(),
         }
+    }
+
+    /// Replace a local directory with a label wherever it would appear in the receipt.
+    pub fn hide(&mut self, path: &Path, label: &'static str) {
+        let text = path.to_string_lossy().into_owned();
+        if text.len() > 1 {
+            self.hidden.push((text, label));
+            self.hidden
+                .sort_by_key(|(text, _)| std::cmp::Reverse(text.len()));
+        }
+    }
+
+    fn scrub(&self, text: &str) -> String {
+        self.hidden
+            .iter()
+            .fold(text.to_owned(), |text, (path, label)| {
+                text.replace(path, label)
+            })
     }
 
     /// Record the outcome, write the receipt beside the install state and clear staging.
     /// Returns the receipt path when admission had begun.
     pub fn finish<T>(&mut self, state_file: &Path, result: &Result<T>) -> Result<Option<PathBuf>> {
-        let Some(staging) = self.staging.take() else {
+        if !self.started {
             return Ok(None);
+        }
+        let cleared = match self.staging.take() {
+            Some(staging) => remove_tree(&staging)
+                .with_context(|| format!("clearing staging {}", staging.display())),
+            None => Ok(()),
         };
-        let cleared = remove_tree(&staging);
         if let Err(error) = result {
             self.decision = Decision::Refused;
             self.activation = None;
-            self.refusal = Some(
-                match error.chain().find_map(|e| e.downcast_ref::<Refusal>()) {
-                    Some(refusal) => RefusalRecord {
-                        code: refusal.code,
-                        detail: refusal.detail.clone(),
-                    },
-                    None => RefusalRecord {
-                        code: RefusalCode::Error,
-                        detail: format!("{error:#}"),
-                    },
-                },
-            );
+            let (code, detail) = match error.chain().find_map(|e| e.downcast_ref::<Refusal>()) {
+                Some(refusal) => (refusal.code, refusal.detail.clone()),
+                None => (RefusalCode::Error, format!("{error:#}")),
+            };
+            self.refusal = Some(RefusalRecord {
+                code,
+                detail: self.scrub(&detail),
+            });
         }
         let now = chrono::Utc::now();
         self.decided_at = now.to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
@@ -1613,7 +1809,7 @@ impl Receipt {
         let tmp = path.with_extension("json.tmp");
         std::fs::write(&tmp, serde_json::to_string_pretty(self)? + "\n")?;
         std::fs::rename(&tmp, &path)?;
-        cleared.with_context(|| format!("clearing staging {}", staging.display()))?;
+        cleared?;
         Ok(Some(path))
     }
 }
@@ -1637,6 +1833,10 @@ pub(crate) mod testkit {
                 Entry::Symlink(name, target) => (name, b'2', target, &[]),
                 Entry::Fifo(name) => (name, b'6', "", &[]),
             };
+            assert!(
+                name.len() <= 100 && link.len() <= 100,
+                "this writer has no long names"
+            );
             let mut header = [0u8; 512];
             header[..name.len()].copy_from_slice(name.as_bytes());
             header[100..108].copy_from_slice(b"0000644\0");
@@ -1929,6 +2129,15 @@ mod tests {
             RefusalCode::ArchiveChanged
         );
 
+        // A pipe at the archive path is refused at once instead of being waited on.
+        let pipe = root.join("pipe.tar");
+        let c = std::ffi::CString::new(pipe.as_os_str().as_encoded_bytes()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o644) }, 0);
+        assert_eq!(
+            code(&BoundArchive::open(&pipe, &lock).err().unwrap()),
+            RefusalCode::UnapprovedIdentity
+        );
+
         // A symbolic link is not an approved archive, whatever it points to.
         std::fs::write(&path, &approved).unwrap();
         let link = root.join("link.tar");
@@ -1941,13 +2150,9 @@ mod tests {
     }
 
     #[test]
-    fn the_rar_route_extracts_through_unar_under_confinement() {
+    fn unar_takes_rar_names_and_what_7zz_cannot_read() {
         let root = scratch("unar");
-        let path = root.join("fixture.rar");
         let bytes = tar(&[Entry::File("Data/Fixture.esp", b"through unar")]);
-        std::fs::write(&path, &bytes).unwrap();
-        let mut lock = locked(&bytes);
-        lock.file_name = Some("fixture.rar".into());
         let policy = Policy {
             limits: Limits {
                 reserve_bytes: 0,
@@ -1955,19 +2160,34 @@ mod tests {
             },
             ..Default::default()
         };
-        let bound = BoundArchive::open(&path, &lock).unwrap();
-        // The name ends in .rar, so 7zz is never tried.
-        let label = extract(tool, &bound, "fixture.rar", &root.join("out"), &policy).unwrap();
-        assert!(label.starts_with("landlock-abi-"), "{label}");
-        assert_eq!(
-            std::fs::read(root.join("out/Data/Fixture.esp")).unwrap(),
-            b"through unar"
-        );
+        // No 7zz exists for these runs, so only unar can have produced the output.
+        let only_unar = |name: &str| match name {
+            "7zz" => PathBuf::from("/nonexistent/7zz"),
+            other => PathBuf::from(other),
+        };
+        for (file_name, out) in [("fixture.rar", "rar"), ("fixture.7z", "fallback")] {
+            let path = root.join(file_name);
+            std::fs::write(&path, &bytes).unwrap();
+            let mut lock = locked(&bytes);
+            lock.file_name = Some(file_name.into());
+            let bound = BoundArchive::open(&path, &lock).unwrap();
+            let label = extract(only_unar, &bound, file_name, &root.join(out), &policy).unwrap();
+            assert!(label.starts_with("landlock-abi-"), "{label}");
+            assert_eq!(
+                std::fs::read(root.join(out).join("Data/Fixture.esp")).unwrap(),
+                b"through unar"
+            );
+        }
+        // With neither tool the archive is unreadable, which is a refusal and not a crash.
+        let none = |name: &str| PathBuf::from(format!("/nonexistent/{name}"));
+        let bound = BoundArchive::open(&root.join("fixture.7z"), &locked(&bytes)).unwrap();
+        let error = extract(none, &bound, "fixture.7z", &root.join("none"), &policy).unwrap_err();
+        assert_eq!(code(&error), RefusalCode::ExtractionFailed);
         std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
-    fn a_confined_process_writes_only_below_its_directory_and_within_its_size_limit() {
+    fn a_confined_process_is_held_to_its_directory_its_limits_and_itself() {
         let root = scratch("confine");
         let (inside, outside) = (root.join("inside"), root.join("outside"));
         std::fs::create_dir_all(&inside).unwrap();
@@ -1977,51 +2197,98 @@ mod tests {
             max_file_bytes: 64 << 10,
             ..Default::default()
         };
-        std::fs::write(outside.join("credential.txt"), b"secret").unwrap();
+        let credential = outside.join("credential.txt");
+        std::fs::write(&credential, b"secret").unwrap();
         let (ruleset, abi) =
             landlock(&inside, &[]).expect("Landlock must be available where these tests run");
         assert!(abi >= 1);
-        let run = |script: &str| {
-            let mut cmd = Command::new("sh");
-            cmd.arg("-c")
-                .arg(script)
-                .arg("sh")
-                .arg(&inside)
-                .arg(&outside)
-                .stderr(Stdio::null());
+        // Each command is itself the confined process; a shell runs only its own builtins.
+        let run = |program: &str, args: &[&std::ffi::OsStr]| {
+            let mut cmd = Command::new(program);
+            cmd.args(args).stdout(Stdio::null()).stderr(Stdio::null());
             restrict(
                 &mut cmd,
                 keep.as_raw_fd(),
                 &limits,
                 Some(ruleset.as_raw_fd()),
             );
-            cmd.status().unwrap()
+            cmd.status().unwrap().success()
         };
-        assert!(run(r#"echo in > "$1/in.txt""#).success());
+        let sh = |script: &str| {
+            run(
+                "sh",
+                &[
+                    "-c".as_ref(),
+                    script.as_ref(),
+                    "sh".as_ref(),
+                    inside.as_os_str(),
+                    outside.as_os_str(),
+                ],
+            )
+        };
+        let (os, at) = (std::ffi::OsStr::new, |p: &Path, n: &str| {
+            p.join(n).into_os_string()
+        });
+
+        // Files: write only below its own directory.
+        assert!(sh(r#"echo in > "$1/in.txt""#));
         assert_eq!(std::fs::read(inside.join("in.txt")).unwrap(), b"in\n");
-        assert!(!run(r#"echo out > "$2/out.txt""#).success());
-        assert!(!run(r#"mkdir "$2/dir""#).success());
-        assert!(!run(r#"ln -s "$2" "$1/link" && echo out > "$1/link/through.txt""#).success());
-        assert!(!run(r#"mv "$1/in.txt" "$2/moved.txt""#).success());
-        assert!(!run(r#"mkfifo "$1/pipe""#).success());
+        assert!(!sh(r#"echo out > "$2/out.txt""#));
+        assert!(!run("mkdir", &[&at(&outside, "dir")]));
+        assert!(run(
+            "ln",
+            &[os("-s"), outside.as_os_str(), &at(&inside, "link")]
+        ));
+        assert!(!sh(r#"echo out > "$1/link/through.txt""#));
+        assert!(!run(
+            "mv",
+            &[&at(&inside, "in.txt"), &at(&outside, "moved.txt")]
+        ));
+        assert!(!run("mkfifo", &[&at(&inside, "pipe")]));
         assert_eq!(
             std::fs::read_dir(&outside).unwrap().count(),
             1,
             "nothing may appear outside the confined directory"
         );
-        // It cannot read the user's files either, so an archive cannot make it leak them.
-        assert!(!run(r#"cat "$2/credential.txt""#).success());
-        assert!(!run(r#"ls "$2""#).success());
-        assert!(run(r#"cat "$1/in.txt" && ls "$1" /etc"#).success());
+
+        // Files: read its own directory and the system, never the user's files, other
+        // processes or shared memory.
+        assert!(run("cat", &[&at(&inside, "in.txt")]) && run("ls", &[inside.as_os_str()]));
+        assert!(run("ls", &[os("/etc")]));
+        assert!(!run("cat", &[credential.as_os_str()]));
+        assert!(!run("ls", &[outside.as_os_str()]));
+        assert!(!run("ls", &[os("/proc/self")]) && !run("ls", &[os("/dev/shm")]));
         std::env::set_var("SKYFORGE_TEST_CREDENTIAL", "secret");
         assert!(
-            run(r#"test -z "$SKYFORGE_TEST_CREDENTIAL""#).success(),
+            sh(r#"test -z "$SKYFORGE_TEST_CREDENTIAL""#),
             "the environment must not be inherited"
         );
         std::env::remove_var("SKYFORGE_TEST_CREDENTIAL");
-        let big = run(r#"head -c 200000 /dev/zero > "$1/big.bin""#);
-        assert!(!big.success());
+
+        // Limits: a file larger than the limit ends the process.
+        assert!(!sh(r#"exec head -c 200000 /dev/zero > "$1/big.bin""#));
         assert!(std::fs::metadata(inside.join("big.bin")).unwrap().len() <= 64 << 10);
+
+        // Itself: no second process, no socket, no signal to another process, and a mode
+        // change outside its directory does nothing.
+        assert!(sh(r#"exec ls "$1""#), "one program may replace the shell");
+        assert!(
+            !sh(r#"ls "$1" || exit 7; exit 0"#),
+            "a second process must not start"
+        );
+        assert!(run("python3", &[os("-c"), os("pass")]));
+        assert!(!run(
+            "python3",
+            &[os("-c"), os("import socket; socket.socket()")]
+        ));
+        assert!(!run(
+            "python3",
+            &[os("-c"), os("import socket; socket.socket(socket.AF_UNIX)")]
+        ));
+        assert!(!sh(r#"kill -0 "$PPID""#));
+        let mode = std::fs::metadata(&credential).unwrap().mode();
+        run("chmod", &[os("777"), credential.as_os_str()]);
+        assert_eq!(std::fs::metadata(&credential).unwrap().mode(), mode);
         std::fs::remove_dir_all(root).unwrap();
     }
 
@@ -2245,6 +2512,14 @@ mod tests {
             1,
             "the old version and the assembly directory are gone"
         );
+
+        // A filesystem without an atomic exchange keeps the old folder until the new one is in.
+        write(&assembly_dir(&root, "Mod"), "two, replaced");
+        assert_eq!(activate_dir_with(&root, "Mod", false).unwrap(), "replace");
+        assert_eq!(read(), "two, replaced");
+        assert_eq!(std::fs::read_dir(&root).unwrap().count(), 1);
+        write(&assembly_dir(&root, "Mod"), "two");
+        activate_dir(&root, "Mod").unwrap();
 
         // Interrupted before the new folder was in place: the old one is restored.
         std::fs::rename(root.join("Mod"), root.join(".Mod.skyforge-old")).unwrap();

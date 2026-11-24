@@ -280,6 +280,15 @@ pub enum InstallOutcome {
     Deferred(String),
 }
 
+/// Whether the newest game-root journal of this key has no end: the run that wrote it was
+/// cut off between its first and last file.
+fn game_root_interrupted(cfg: &Config, key: &str) -> bool {
+    let Ok(runs) = std::fs::read_dir(cfg.workspace.join("backups/game-root").join(key)) else { return false };
+    let Some(latest) = runs.flatten().map(|run| run.path()).max() else { return false };
+    let Ok(text) = std::fs::read_to_string(latest.join("journal.json")) else { return false };
+    serde_json::from_str::<serde_json::Value>(&text).is_ok_and(|journal| journal.get("completed_at").is_none() && journal.get("rolled_back_at").is_none())
+}
+
 fn same_file_bytes(source: &Path, destination: &Path) -> Result<bool> {
     use std::fs::OpenOptions;
     use std::io::Read;
@@ -326,6 +335,16 @@ pub fn install_one(
     game_version: &str,
 ) -> Result<InstallOutcome> {
     let mut receipt = admission::Receipt::begin(&e.key, &format!("{:?}", e.target), files, &e.executables, &e.extra_types, &cfg.admission);
+    // A receipt can be shared for review, so it names local directories by role, not by path.
+    for (path, label) in [(&cfg.staging, "<staging>"), (&cfg.downloads, "<downloads>"), (&cfg.mods_dir(), "<mods>"), (&cfg.mo2_instance, "<mo2>"), (&cfg.stock_game, "<game-root>"), (&cfg.workspace, "<workspace>")] {
+        receipt.hide(path, label);
+    }
+    if let Some(overflow) = &cfg.downloads_overflow {
+        receipt.hide(overflow, "<downloads>");
+    }
+    if let Some(home) = std::env::var_os("HOME") {
+        receipt.hide(std::path::Path::new(&home), "<home>");
+    }
     let result = install_checked(cfg, e, files, state, active_files, game_version, &mut receipt);
     match receipt.finish(&cfg.state, &result) {
         Ok(_) => result,
@@ -375,13 +394,21 @@ fn install_checked(
             bail!("{} exists but is not managed by skyforge; refusing to replace it", dest_dir.display());
         }
     }
+    // A game-root activation that was cut off left a journal without an end. Until a run
+    // completes, the files on disk are not known to match any record.
+    let interrupted = e.target == Target::GameRoot && game_root_interrupted(cfg, &e.key);
     if let Some(r) = state.installs.get(&e.key) {
-        if r.fingerprint == fp && r.dir == dest_dir && (e.target == Target::GameRoot || dest_dir.exists()) {
+        if !interrupted && r.fingerprint == fp && r.dir == dest_dir && (e.target == Target::GameRoot || dest_dir.exists()) {
             if r.fomod_contexts.as_ref().is_some_and(|watches| watches.iter().all(|watch| watch.matches(&ctx))) {
                 return Ok(InstallOutcome::Unchanged);
             }
         }
     }
+    // The key names the receipt directory, so it is checked before a receipt is promised.
+    if !admission::safe_key(&e.key) {
+        return Err(admission::Refusal { code: admission::RefusalCode::UnapprovedIdentity, detail: format!("manifest key {:?} cannot name a staging directory", e.key) }.into());
+    }
+    receipt.started = true;
     let staging = admission::owned_staging(&cfg.staging, &e.key)?;
     receipt.staging = Some(staging.clone());
     let mut staged = admission::Staged::default();
@@ -391,9 +418,10 @@ fn install_checked(
     let mut display: HashMap<String, String> = HashMap::new();
     for (ai, f) in files.iter().enumerate() {
         let path = admission::approved_path(&cfg.downloads, cfg.downloads_overflow.as_deref(), f)?;
-        let archive = admission::BoundArchive::open(&path, f)?;
+        let archive = admission::BoundArchive::read(&path)?;
         receipt.archives[ai].observed_sha256 = Some(archive.sha256.clone());
         receipt.archives[ai].size = Some(archive.size);
+        archive.approve(f)?;
         let x = staging.join(format!("a{ai}"));
         receipt.confinement = admission::extract(|tool| cfg.tool(tool), &archive, &receipt.archives[ai].file_name, &x, &cfg.admission)
             .with_context(|| format!("{}: extracting {}", e.key, receipt.archives[ai].file_name))?;
@@ -433,7 +461,7 @@ fn install_checked(
     if let Some(previous) = state.installs.get(&e.key) {
         let mut planned: Vec<_> = display.values().cloned().collect();
         planned.sort();
-        if previous.fingerprint == rec.fingerprint && previous.dir == dest_dir
+        if !interrupted && previous.fingerprint == rec.fingerprint && previous.dir == dest_dir
             && previous.files == planned && previous.fomod_chosen == rec.fomod_chosen {
             let mut equal = true;
             for (key, (source, ..)) in &merged {
@@ -494,43 +522,115 @@ fn install_checked(
         }
         Target::GameRoot => {
             let bdir = cfg.workspace.join("backups/game-root").join(&e.key).join(chrono::Local::now().format("%Y%m%d-%H%M%S").to_string());
-            // Refuse before the first write: the game root never gains a path through a link.
+            // Refuse before the first write: no planned path may pass through a link or
+            // replace anything but a regular file.
             for k in merged.keys() {
-                let d = dest_dir.join(&display[k]);
-                if std::fs::symlink_metadata(&d).is_ok_and(|m| !m.is_file()) {
-                    bail!("{}: {} exists in the game root and is not a regular file", e.key, display[k]);
+                let mut at = dest_dir.clone();
+                let parts: Vec<&str> = display[k].split('/').collect();
+                for (i, part) in parts.iter().enumerate() {
+                    at.push(part);
+                    let last = i + 1 == parts.len();
+                    match std::fs::symlink_metadata(&at) {
+                        Ok(m) if (last && m.is_file()) || (!last && m.is_dir()) => {}
+                        Ok(_) => bail!("{}: {} passes through or replaces something in the game root that is not a plain file or directory", e.key, display[k]),
+                        Err(error) if error.kind() == std::io::ErrorKind::NotFound => break,
+                        Err(error) => return Err(error.into()),
+                    }
                 }
             }
-            // The journal names every path this activation may touch. It is completed only
-            // after the last file, so an interrupted run is visible and can be rerun.
+            // The journal names every path this activation may touch. It gains an end only
+            // when the run completes or is rolled back, so a run that was cut off is visible.
             std::fs::create_dir_all(&bdir)?;
             let journal = bdir.join("journal.json");
             let mut planned_paths: Vec<&String> = merged.keys().map(|k| &display[k]).collect();
             planned_paths.sort();
             let mut entry = serde_json::json!({"version": 1, "key": e.key, "plan_sha256": rec.plan_sha256, "started_at": chrono::Local::now().to_rfc3339(), "files": planned_paths});
-            std::fs::write(&journal, serde_json::to_string_pretty(&entry)? + "\n")?;
-            let mut replaced = false;
+            let write_journal = |entry: &serde_json::Value| -> Result<()> { Ok(std::fs::write(&journal, serde_json::to_string_pretty(entry)? + "\n")?) };
+            write_journal(&entry)?;
+            // Phase 1: write every new file beside its destination under a temporary name and
+            // confirm its bytes. Nothing the game reads has changed, so a failure here removes
+            // the temporaries and leaves the game root as it was.
+            let mut written: Vec<(PathBuf, PathBuf, &String)> = Vec::new();
+            let mut failure = None;
             for (k, (src, ..)) in &merged {
                 let d = dest_dir.join(&display[k]);
-                std::fs::create_dir_all(d.parent().unwrap())?;
-                // A file that already holds the planned bytes was written by an interrupted
-                // run. Its original is in that run's backup, so it is not backed up again.
-                if d.exists() && !same_file_bytes(src, &d)? {
-                    let b = bdir.join(&display[k]);
-                    std::fs::create_dir_all(b.parent().unwrap())?;
-                    std::fs::copy(&d, &b)?;
-                    rec.backups.push(display[k].clone());
-                    replaced = true;
-                }
                 let name = d.file_name().unwrap().to_string_lossy().into_owned();
                 let tmp = d.with_file_name(format!(".{name}.skyforge-new"));
-                admission::remove_tree(&tmp)?;
-                admission::place_verified(src, &tmp, &proofs[k], true)?;
-                std::fs::rename(&tmp, &d)?;
-                rec.files.push(display[k].clone());
+                let step = (|| -> Result<()> {
+                    std::fs::create_dir_all(d.parent().unwrap())?;
+                    admission::remove_tree(&tmp)?;
+                    admission::place_verified(src, &tmp, &proofs[k], true)
+                })();
+                match step {
+                    Ok(()) => written.push((tmp, d, &display[k])),
+                    Err(error) => {
+                        admission::remove_tree(&tmp).ok();
+                        failure = Some(error);
+                        break;
+                    }
+                }
+            }
+            // Phase 2: back up and rename, one file at a time. A failure undoes the files
+            // already switched, so the game root is the old set or the new one.
+            enum Undo { Restore(PathBuf), Remove, Keep }
+            let mut done: Vec<(&PathBuf, Undo)> = Vec::new();
+            if failure.is_none() {
+                for (tmp, d, shown) in &written {
+                    let step = (|| -> Result<Undo> {
+                        #[cfg(test)]
+                        tests::injected_failure(done.len())?;
+                        let undo = if std::fs::symlink_metadata(d).is_err() {
+                            Undo::Remove
+                        } else if same_file_bytes(tmp, d)? {
+                            // Written by a run that was cut off. Its original is in that
+                            // run's backup, so it is not backed up again.
+                            Undo::Keep
+                        } else {
+                            let b = bdir.join(shown);
+                            std::fs::create_dir_all(b.parent().unwrap())?;
+                            std::fs::copy(d, &b)?;
+                            Undo::Restore(b)
+                        };
+                        std::fs::rename(tmp, d)?;
+                        Ok(undo)
+                    })();
+                    match step {
+                        Ok(undo) => done.push((d, undo)),
+                        Err(error) => {
+                            failure = Some(error);
+                            break;
+                        }
+                    }
+                }
+            }
+            if let Some(error) = failure {
+                for (d, undo) in done.iter().rev() {
+                    match undo {
+                        Undo::Restore(b) => {
+                            let back = d.with_file_name(format!(".{}.skyforge-undo", d.file_name().unwrap().to_string_lossy()));
+                            std::fs::copy(b, &back).and_then(|_| std::fs::rename(&back, d)).with_context(|| format!("{}: restoring a replaced game-root file from its backup", e.key))?;
+                        }
+                        Undo::Remove => std::fs::remove_file(d)?,
+                        Undo::Keep => {}
+                    }
+                }
+                for (tmp, ..) in &written {
+                    admission::remove_tree(tmp).ok();
+                }
+                entry["rolled_back_at"] = chrono::Local::now().to_rfc3339().into();
+                write_journal(&entry)?;
+                return Err(error);
+            }
+            let mut replaced = false;
+            for ((_, _, shown), (_, undo)) in written.iter().zip(&done) {
+                if matches!(undo, Undo::Restore(_)) {
+                    rec.backups.push((*shown).clone());
+                    replaced = true;
+                }
+                rec.files.push((*shown).clone());
             }
             entry["completed_at"] = chrono::Local::now().to_rfc3339().into();
-            std::fs::write(&journal, serde_json::to_string_pretty(&entry)? + "\n")?;
+            write_journal(&entry)?;
             receipt.activation = Some(admission::ActivationRecord { method: "game-root", replaced_existing: replaced });
         }
         Target::None => {}
@@ -691,6 +791,18 @@ mod tests {
 
     // ---- Archive admission, end to end through install_one with synthetic archives ----
 
+    thread_local! {
+        /// The number of game-root files after which the next switch fails, for one test.
+        static FAIL_AT: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
+    }
+
+    pub(super) fn injected_failure(switched: usize) -> anyhow::Result<()> {
+        if FAIL_AT.with(|at| at.get()) == Some(switched) {
+            anyhow::bail!("injected failure after {switched} switched files");
+        }
+        Ok(())
+    }
+
     use super::admission::testkit::{scratch, tar, Entry};
     use super::admission::{ExecClass, Refusal, RefusalCode};
 
@@ -828,7 +940,9 @@ mod tests {
         let receipts = f.receipts();
         let r = receipts.last().unwrap();
         assert_eq!((r["decision"].as_str(), r["refusal"]["code"].as_str()), (Some("refused"), Some("digest-mismatch")));
-        assert_ne!(r["archives"][0]["approved_sha256"], r["archives"][0]["observed_sha256"]);
+        let substituted = hex::encode(super::Sha256::digest(tar(&[Entry::File("Fixture.esp", b"substituted")])));
+        assert_eq!(r["archives"][0]["observed_sha256"].as_str(), Some(substituted.as_str()));
+        assert_ne!(r["archives"][0]["approved_sha256"].as_str(), Some(substituted.as_str()));
         assert!(r.get("plan").is_none() && r.get("activation").is_none());
         // Approving the new bytes in the lock is what lets them in.
         f.approve(&tar(&[Entry::File("Fixture.esp", b"substituted")]));
@@ -840,45 +954,47 @@ mod tests {
 
     #[test]
     fn links_and_special_entries_are_refused() {
-        let outside = scratch("victim");
-        let target = outside.to_string_lossy().into_owned();
-        let cases: Vec<Vec<Entry>> = vec![
-            vec![Entry::File("Fixture.esp", b"x"), Entry::Symlink("link", "/etc/hostname")],
-            vec![Entry::File("Fixture.esp", b"x"), Entry::Symlink("up", "../../../outside")],
-            vec![Entry::File("Fixture.esp", b"x"), Entry::Hardlink("Copy.esp", "Fixture.esp")],
-            vec![Entry::Symlink("d", &target), Entry::File("d/pwned.txt", b"pwned")],
+        // A directory next to staging that the last archive tries to write through a link:
+        // staging is <workspace>/staging/<key>/a0, so three levels up is the workspace.
+        let target = "../../../victim";
+        // With the pinned tools: 7zz restores the first link and the hard link; it refuses the
+        // upward link, and unar then creates it. Inspection refuses all three. Neither tool
+        // will write through the last link, so that archive is unreadable.
+        let cases: Vec<(Vec<Entry>, RefusalCode)> = vec![
+            (vec![Entry::File("Fixture.esp", b"x"), Entry::Symlink("link", "/etc/hostname")], RefusalCode::UnsupportedEntry),
+            (vec![Entry::File("Fixture.esp", b"x"), Entry::Symlink("up", "../../../outside")], RefusalCode::UnsupportedEntry),
+            (vec![Entry::File("Fixture.esp", b"x"), Entry::Hardlink("Copy.esp", "Fixture.esp")], RefusalCode::UnsupportedEntry),
+            (vec![Entry::Symlink("d", target), Entry::File("d/pwned.txt", b"pwned")], RefusalCode::ExtractionFailed),
         ];
-        for entries in &cases {
+        for (entries, expected) in &cases {
             let mut f = Fixture::new(&tar(entries));
-            let code = f.refused();
-            assert!(matches!(code, RefusalCode::UnsupportedEntry | RefusalCode::ExtractionFailed), "{code:?}");
+            let victim = f.cfg.workspace.join("victim");
+            std::fs::create_dir(&victim).unwrap();
+            assert_eq!(f.refused(), *expected);
             assert!(!f.mod_dir().exists());
             f.assert_clean();
             assert_eq!(f.receipts()[0]["decision"].as_str(), Some("refused"));
+            assert_eq!(std::fs::read_dir(&victim).unwrap().count(), 0, "an archive link must not carry a write outside staging");
         }
-        assert_eq!(std::fs::read_dir(&outside).unwrap().count(), 0, "an archive link must not carry a write outside staging");
-        std::fs::remove_dir_all(outside).unwrap();
     }
 
     #[test]
     fn traversal_and_absolute_names_stay_inside_the_mod_folder() {
-        let outside = scratch("escape");
-        let absolute = format!("{}/absolute.txt", outside.display());
+        let absolute = format!("/tmp/skyforge-absolute-{}.txt", std::process::id());
         let mut f = Fixture::new(&tar(&[Entry::File("../../../../traversal.txt", b"x"), Entry::File(&absolute, b"x"), Entry::File("Fixture.esp", b"x")]));
         let workspace = f.cfg.workspace.clone();
-        // The extractors neutralise these names; whatever they produce, it stays below staging
-        // and then below the mod folder.
-        if f.install().is_ok() {
-            for entry in walkdir::WalkDir::new(f.cfg.mods_dir()).into_iter().flatten() {
-                assert!(entry.path().starts_with(f.mod_dir()) || entry.path() == f.cfg.mods_dir());
-            }
+        // The pinned 7zz strips the upward and leading parts of these names, so the archive
+        // installs and everything it produced is below the mod folder.
+        assert!(matches!(f.install().unwrap(), super::InstallOutcome::Installed(3)));
+        assert!(f.mod_dir().join("traversal.txt").is_file() && f.mod_dir().join("Fixture.esp").is_file());
+        for entry in walkdir::WalkDir::new(f.cfg.mods_dir()).into_iter().flatten() {
+            assert!(entry.path().starts_with(f.mod_dir()) || entry.path() == f.cfg.mods_dir());
         }
         f.assert_clean();
-        assert_eq!(std::fs::read_dir(&outside).unwrap().count(), 0);
+        assert!(!std::path::Path::new(&absolute).exists(), "the absolute name was written to");
         for up in workspace.ancestors().skip(1).take(4) {
             assert!(!up.join("traversal.txt").exists(), "escaped to {}", up.display());
         }
-        std::fs::remove_dir_all(outside).unwrap();
     }
 
     fn fomod(file_rule: &str) -> String {
@@ -954,12 +1070,14 @@ mod tests {
     #[test]
     fn a_pipe_entry_never_reaches_the_mod_folder_as_a_pipe() {
         let mut f = Fixture::new(&tar(&[Entry::File("Fixture.esp", b"x"), Entry::Fifo("textures/pipe.dds")]));
-        if f.install().is_ok() {
-            for entry in walkdir::WalkDir::new(f.mod_dir()).into_iter().flatten() {
-                let kind = std::fs::symlink_metadata(entry.path()).unwrap().file_type();
-                assert!(kind.is_dir() || kind.is_file(), "{}", entry.path().display());
-            }
+        // The pinned 7zz writes a pipe entry as an empty regular file; the sandbox would
+        // refuse a real one and inspection would refuse it again.
+        assert!(matches!(f.install().unwrap(), super::InstallOutcome::Installed(2)));
+        for entry in walkdir::WalkDir::new(f.mod_dir()).into_iter().flatten() {
+            let kind = std::fs::symlink_metadata(entry.path()).unwrap().file_type();
+            assert!(kind.is_dir() || kind.is_file(), "{}", entry.path().display());
         }
+        assert_eq!(std::fs::metadata(f.mod_dir().join("textures/pipe.dds")).unwrap().len(), 0);
         f.assert_clean();
     }
 
@@ -1085,6 +1203,34 @@ mod tests {
     }
 
     #[test]
+    fn a_receipt_names_local_directories_by_role_only() {
+        use std::os::unix::fs::PermissionsExt;
+        // An owner-placed local source: its lock entry carries the full path.
+        let archive = tar(&[Entry::File("Fixture.esp", b"x")]);
+        let mut f = Fixture::new(&archive);
+        let local = f.cfg.workspace.join("generated/output.tar");
+        std::fs::create_dir_all(local.parent().unwrap()).unwrap();
+        std::fs::write(&local, &archive).unwrap();
+        let path = local.to_string_lossy().into_owned();
+        f.files[0] = super::LockedFile { source: "local".into(), display_name: path.clone(), file_name: Some(path), verified_by: Some("local-hash-recorded".into()), ..f.files[0].clone() };
+        f.install().unwrap();
+        // A refusal whose detail would name the staging root.
+        std::fs::set_permissions(&f.cfg.staging, std::fs::Permissions::from_mode(0o777)).unwrap();
+        f.approve(&tar(&[Entry::File("Fixture.esp", b"y")]));
+        assert_eq!(f.refused(), RefusalCode::StagingNotOwned);
+        let receipts = f.receipts();
+        assert_eq!(receipts.len(), 2, "a refusal before staging exists still leaves a receipt");
+        assert_eq!((receipts[0]["archives"][0]["name"].as_str(), receipts[0]["archives"][0]["file_name"].as_str()), (Some("output.tar"), Some("output.tar")));
+        assert_eq!(receipts[1]["refusal"]["code"].as_str(), Some("staging-not-owned"));
+        assert!(receipts[1]["refusal"]["detail"].as_str().unwrap().contains("<staging>"));
+        let workspace = f.cfg.workspace.to_string_lossy().into_owned();
+        for receipt in &receipts {
+            let text = serde_json::to_string(receipt).unwrap();
+            assert!(!text.contains(&workspace) && !text.contains("/test-output/"), "{text}");
+        }
+    }
+
+    #[test]
     fn a_folder_skyforge_did_not_install_is_not_replaced() {
         let mut f = Fixture::new(&tar(&[Entry::File("Fixture.esp", b"from the archive")]));
         std::fs::create_dir_all(f.mod_dir()).unwrap();
@@ -1121,6 +1267,80 @@ mod tests {
         assert_eq!(r["executables"].as_array().unwrap().len(), 2);
         assert!(!f.cfg.stock_game.join(".d3dx9_42.dll.skyforge-new").exists());
         f.assert_clean();
+    }
+
+    fn root_names(dir: &std::path::Path) -> Vec<String> {
+        let mut names: Vec<String> = walkdir::WalkDir::new(dir).min_depth(1).into_iter().flatten().filter(|e| e.file_type().is_file()).map(|e| e.path().strip_prefix(dir).unwrap().to_string_lossy().into_owned()).collect();
+        names.sort();
+        names
+    }
+
+    fn game_root_fixture() -> Fixture {
+        let mut f = Fixture::new(&tar(&[Entry::File("a_first.dll", b"MZ\x90\0 new a"), Entry::File("b_second.dll", b"MZ\x90\0 new b"), Entry::File("c_third.dll", b"MZ\x90\0 new c")]));
+        f.entry = serde_json::from_value(serde_json::json!({"key": "fixture", "name": "Fixture root", "status": "SELECTED", "target": "game-root", "executables": ["native-library"]})).unwrap();
+        std::fs::create_dir_all(&f.cfg.stock_game).unwrap();
+        for (name, bytes) in [("SkyrimSE.exe", "game"), ("a_first.dll", "old a"), ("b_second.dll", "old b")] {
+            std::fs::write(f.cfg.stock_game.join(name), bytes).unwrap();
+        }
+        f
+    }
+
+    #[test]
+    fn a_game_root_install_that_fails_midway_leaves_the_old_files() {
+        // Every position: before the first switch, between files, before the last.
+        for at in 0..3 {
+            let mut f = game_root_fixture();
+            let before = root_names(&f.cfg.stock_game);
+            FAIL_AT.with(|cell| cell.set(Some(at)));
+            let error = f.install().err().unwrap().to_string();
+            FAIL_AT.with(|cell| cell.set(None));
+            assert!(error.contains("injected failure"), "{error}");
+            assert_eq!(root_names(&f.cfg.stock_game), before, "failure after {at} files");
+            assert_eq!(std::fs::read(f.cfg.stock_game.join("a_first.dll")).unwrap(), b"old a");
+            assert_eq!(std::fs::read(f.cfg.stock_game.join("b_second.dll")).unwrap(), b"old b");
+            assert!(!f.cfg.stock_game.join("c_third.dll").exists());
+            assert!(f.state.installs.is_empty());
+            let receipts = f.receipts();
+            let r = receipts.last().unwrap();
+            assert_eq!((r["decision"].as_str(), r["refusal"]["code"].as_str()), (Some("refused"), Some("error")));
+            let run = std::fs::read_dir(f.cfg.workspace.join("backups/game-root/fixture")).unwrap().flatten().next().unwrap().path();
+            let journal: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(run.join("journal.json")).unwrap()).unwrap();
+            assert!(journal["rolled_back_at"].is_string() && journal.get("completed_at").is_none());
+            // The same install then completes normally.
+            std::thread::sleep(std::time::Duration::from_millis(1100));
+            assert!(matches!(f.install().unwrap(), super::InstallOutcome::Installed(3)));
+            assert_eq!(std::fs::read(f.cfg.stock_game.join("c_third.dll")).unwrap(), b"MZ\x90\0 new c");
+        }
+    }
+
+    #[test]
+    fn a_cut_off_game_root_install_is_never_reported_unchanged() {
+        let mut f = game_root_fixture();
+        f.install().unwrap();
+        assert!(matches!(f.install().unwrap(), super::InstallOutcome::Unchanged));
+        // A later run was cut off after its first file: its journal has no end and one
+        // file holds bytes no record describes.
+        let cut = f.cfg.workspace.join("backups/game-root/fixture/99991231-235959");
+        std::fs::create_dir_all(&cut).unwrap();
+        std::fs::write(cut.join("journal.json"), r#"{"version":1,"key":"fixture","started_at":"x","files":["a_first.dll"]}"#).unwrap();
+        std::fs::write(f.cfg.stock_game.join("a_first.dll"), b"MZ half written by the cut-off run").unwrap();
+        // The unchanged entry is not skipped: the planned bytes are installed again.
+        assert!(matches!(f.install().unwrap(), super::InstallOutcome::Installed(3)));
+        assert_eq!(std::fs::read(f.cfg.stock_game.join("a_first.dll")).unwrap(), b"MZ\x90\0 new a");
+    }
+
+    #[test]
+    fn a_game_root_path_through_a_link_is_refused_before_any_write() {
+        let outside = scratch("root-link");
+        let mut f = Fixture::new(&tar(&[Entry::File("Data/SKSE/Plugins/Thing.dll", b"MZ\x90\0 plugin")]));
+        f.entry = serde_json::from_value(serde_json::json!({"key": "fixture", "name": "Fixture root", "status": "SELECTED", "target": "game-root", "executables": ["skse-plugin"]})).unwrap();
+        std::fs::create_dir_all(&f.cfg.stock_game).unwrap();
+        std::fs::write(f.cfg.stock_game.join("SkyrimSE.exe"), b"game").unwrap();
+        std::os::unix::fs::symlink(&outside, f.cfg.stock_game.join("Data")).unwrap();
+        assert!(f.install().err().unwrap().to_string().contains("not a plain file or directory"));
+        assert_eq!(std::fs::read_dir(&outside).unwrap().count(), 0);
+        assert!(!f.cfg.workspace.join("backups").exists());
+        std::fs::remove_dir_all(outside).unwrap();
     }
 
     /// The part of JSON Schema the receipt contract uses, apart from string patterns, which
