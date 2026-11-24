@@ -955,7 +955,7 @@ impl Sandbox {
     }
 }
 
-fn free_bytes(path: &Path) -> Option<u64> {
+pub(crate) fn free_bytes(path: &Path) -> Option<u64> {
     let c = std::ffi::CString::new(path.as_os_str().as_encoded_bytes()).ok()?;
     let mut s = std::mem::MaybeUninit::<libc::statvfs>::uninit();
     // SAFETY: `c` is a valid C string and `s` is writable for one statvfs record.
@@ -1856,6 +1856,108 @@ pub(crate) mod testkit {
         }
         out.resize(out.len() + 1024, 0);
         out
+    }
+
+    /// The part of JSON Schema the published contracts use, apart from string patterns,
+    /// which the repository's contract verifier checks on the fixtures.
+    pub fn conforms(
+        root: &serde_json::Value,
+        schema: &serde_json::Value,
+        value: &serde_json::Value,
+    ) -> Result<(), String> {
+        use serde_json::Value;
+        if let Some(reference) = schema.get("$ref").and_then(Value::as_str) {
+            return conforms(
+                root,
+                &root["$defs"][reference.trim_start_matches("#/$defs/")],
+                value,
+            );
+        }
+        if let Some(expected) = schema.get("const") {
+            if expected != value {
+                return Err(format!("{value} is not {expected}"));
+            }
+        }
+        if let Some(options) = schema.get("enum").and_then(Value::as_array) {
+            if !options.contains(value) {
+                return Err(format!("{value} is not one of {options:?}"));
+            }
+        }
+        if let Some(kind) = schema.get("type").and_then(Value::as_str) {
+            let ok = match kind {
+                "string" => value.is_string(),
+                "integer" => value.is_u64() || value.is_i64(),
+                "number" => value.is_number(),
+                "boolean" => value.is_boolean(),
+                "array" => value.is_array(),
+                "object" => value.is_object(),
+                "null" => value.is_null(),
+                _ => false,
+            };
+            if !ok {
+                return Err(format!("{value} is not of type {kind}"));
+            }
+        }
+        if let Some(options) = schema.get("oneOf").and_then(Value::as_array) {
+            if options
+                .iter()
+                .filter(|option| conforms(root, option, value).is_ok())
+                .count()
+                != 1
+            {
+                return Err(format!("{value} matches no single alternative"));
+            }
+        }
+        if let Some(inner) = schema.get("not") {
+            if conforms(root, inner, value).is_ok() {
+                return Err(format!("{value} matches a forbidden shape"));
+            }
+        }
+        if let Some(object) = value.as_object() {
+            for name in schema
+                .get("required")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+            {
+                if !object.contains_key(name.as_str().unwrap()) {
+                    return Err(format!("missing {name}"));
+                }
+            }
+            let properties = schema.get("properties").and_then(Value::as_object);
+            for (name, member) in object {
+                match properties.and_then(|p| p.get(name)) {
+                    Some(inner) => {
+                        conforms(root, inner, member).map_err(|e| format!("{name}: {e}"))?
+                    }
+                    None if schema.get("additionalProperties") == Some(&Value::Bool(false)) => {
+                        return Err(format!("unexpected member {name}"))
+                    }
+                    None => {}
+                }
+            }
+        }
+        if let (Some(items), Some(array)) = (schema.get("items"), value.as_array()) {
+            for (i, item) in array.iter().enumerate() {
+                conforms(root, items, item).map_err(|e| format!("[{i}]: {e}"))?;
+            }
+        }
+        for part in schema
+            .get("allOf")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            let branch = if conforms(root, &part["if"], value).is_ok() {
+                part.get("then")
+            } else {
+                part.get("else")
+            };
+            if let Some(branch) = branch {
+                conforms(root, branch, value)?;
+            }
+        }
+        Ok(())
     }
 
     /// A unique scratch directory below the crate's ignored test output.

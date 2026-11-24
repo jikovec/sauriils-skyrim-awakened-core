@@ -1,0 +1,91 @@
+{
+  "coherent": {
+    "version": 1,
+    "id": "20261124T150000Z-aaaaaaaa",
+    "created_at": "2026-11-24T15:00:00Z",
+    "playthrough": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1",
+    "note": "end of session",
+    "save": {
+      "name": "Save12_AAAAAAAA_0_466978747572_FixtureCell_000100_20261124150000_10_1",
+      "save": {
+        "sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+        "size": 5400000
+      },
+      "cosave": {
+        "sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+        "size": 160000
+      },
+      "modified_at": 1795442400
+    },
+    "database": {
+      "lane": "play",
+      "dump": {
+        "sha256": "3333333333333333333333333333333333333333333333333333333333333333",
+        "size": 52000000
+      },
+      "watermark": "4812|4790",
+      "last_event_at": 1795442398,
+      "schema": "2026101319",
+      "tables_sha256": "4444444444444444444444444444444444444444444444444444444444444444"
+    },
+    "coherence": {
+      "state": "coherent",
+      "database_ahead_seconds": 0
+    },
+    "identity": {
+      "game": {
+        "sha256": "5555555555555555555555555555555555555555555555555555555555555555",
+        "size": 37157144
+      },
+      "client": {
+        "sha256": "6666666666666666666666666666666666666666666666666666666666666666",
+        "size": 10500000
+      },
+      "plugins": {
+        "sha256": "7777777777777777777777777777777777777777777777777777777777777777",
+        "size": 21000
+      }
+    },
+    "labels": {
+      "model": "fixture-model-q6"
+    },
+    "capture_seconds": 4.2
+  },
+  "database_ahead": {
+    "version": 1,
+    "id": "20261124T151000Z-aaaaaaaa",
+    "created_at": "2026-11-24T15:10:00Z",
+    "playthrough": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1",
+    "note": "after a crash",
+    "save": {
+      "name": "Quicksave0_AAAAAAAA_0_466978747572_FixtureCell_000110_20261124150500_10_1",
+      "save": {
+        "sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+        "size": 5400000
+      },
+      "cosave": {
+        "sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+        "size": 160000
+      },
+      "modified_at": 1795442700
+    },
+    "database": {
+      "lane": "play",
+      "dump": {
+        "sha256": "3333333333333333333333333333333333333333333333333333333333333333",
+        "size": 52100000
+      },
+      "watermark": "4850|4828",
+      "last_event_at": 1795443096,
+      "schema": "2026101319",
+      "tables_sha256": null
+    },
+    "coherence": {
+      "state": "database-ahead",
+      "database_ahead_seconds": 396
+    },
+    "identity": {},
+    "labels": {},
+    "capture_seconds": 4.4
+  }
+}

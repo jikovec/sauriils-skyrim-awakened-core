@@ -390,6 +390,47 @@ def main():
     print("PASS: speech and action correlation, 10 rejection cases")
     verify_admission()
     verify_identity(event_validator, receipt_validator)
+    verify_checkpoints()
+
+
+def verify_checkpoints():
+    """Check playthrough checkpoint records and reject ones that hide a loss window."""
+    checkpoint = validator("checkpoint-v1.schema.json")
+    records = read_json("fixtures/checkpoints.json")
+
+    def check(record):
+        checkpoint.validate(record)
+        ahead = record["coherence"]["database_ahead_seconds"]
+        last_event = record["database"]["last_event_at"]
+        if last_event is not None and max(0, last_event - record["save"]["modified_at"]) != ahead:
+            raise ValueError("recorded loss window differs from the save and event times")
+        if not record["id"].endswith("-" + record["playthrough"][:8]):
+            raise ValueError("checkpoint ID names another playthrough")
+
+    for record in records.values():
+        check(record)
+
+    cases = {
+        "unknown version": ("coherent", lambda r: r.update(version=2)),
+        "save path": ("coherent", lambda r: r["save"].update(name="saves/Save12")),
+        "name as playthrough": ("coherent", lambda r: r.update(playthrough="Fixture Dragonborn")),
+        "another playthrough's ID": ("coherent", lambda r: r.update(playthrough="b" * 32)),
+        "missing co-save": ("coherent", lambda r: r["save"].pop("cosave")),
+        "missing watermark": ("coherent", lambda r: r["database"].pop("watermark")),
+        "database content": ("coherent", lambda r: r["database"].update(rows=["synthetic"])),
+        "unknown coherence state": ("coherent", lambda r: r["coherence"].update(state="probably")),
+        "hidden loss window": ("database_ahead", lambda r: r["coherence"].update(database_ahead_seconds=0)),
+        "negative loss window": ("database_ahead", lambda r: r["coherence"].update(database_ahead_seconds=-1)),
+    }
+    for name, (base, edit) in cases.items():
+        case = deepcopy(records[base])
+        edit(case)
+        try:
+            check(case)
+        except (ValidationError, ValueError):
+            continue
+        raise ValueError(f"accepted invalid checkpoint record: {name}")
+    print(f"PASS: checkpoint records, {len(cases)} rejection cases")
 
 
 def verify_admission():
