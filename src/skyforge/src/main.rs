@@ -2,6 +2,7 @@
 
 mod admission;
 mod check;
+mod checkpoint;
 mod config;
 mod fetch;
 mod fomod;
@@ -88,6 +89,44 @@ enum Cmd {
     PexPatchChimSchedule { input: PathBuf, output: PathBuf },
     /// Point the MO2 instance at the Stock Game and create the managed profile (idempotent).
     Mo2Setup { #[arg(long, default_value = "./configs/ini")] ini_templates: PathBuf },
+    /// Capture, verify, list or restore a coherent playthrough checkpoint: one save pair and
+    /// one database dump of the same playthrough and moment.
+    Checkpoint {
+        #[command(subcommand)]
+        action: CheckpointCmd,
+    },
+}
+
+#[derive(Subcommand)]
+enum CheckpointCmd {
+    /// Capture the newest (or named) save pair together with the database of a lane.
+    Capture {
+        /// The configured database lane to dump.
+        #[arg(long)] lane: String,
+        /// Save file name without extension. Defaults to the newest save.
+        #[arg(long)] save: Option<String>,
+        /// Record a checkpoint although the database holds events newer than the save.
+        #[arg(long)] accept_database_ahead: bool,
+        #[arg(long, default_value = "")] note: String,
+    },
+    /// Confirm every file of a checkpoint against its record.
+    Verify { id: String },
+    /// List the checkpoints in the store.
+    List,
+    /// Show which checkpoints retention would remove, keeping the newest that verify.
+    Prune {
+        #[arg(long)] keep: usize,
+        /// Delete them. Without this nothing is removed.
+        #[arg(long)] yes: bool,
+    },
+    /// Restore a checkpoint into an independent save directory and database lane.
+    Restore {
+        id: String,
+        /// The save directory to restore into. Never the live one.
+        #[arg(long)] saves: PathBuf,
+        /// The database lane to restore into. Never the one it was captured from.
+        #[arg(long)] lane: String,
+    },
 }
 
 fn skse_packed(v: &str) -> Result<u32> {
@@ -140,6 +179,37 @@ fn main() -> Result<()> {
         return Ok(());
     }
     let cfg = config::Config::load(&cli.config)?;
+    // Checkpoints need no mod source, so they never load the Nexus credential.
+    if let Cmd::Checkpoint { action } = &cli.cmd {
+        let settings = &cfg.checkpoint;
+        let live = settings.saves.clone().map_or_else(|| cfg.profile_dir().join("saves"), |p| if p.is_absolute() { p } else { cfg.workspace.join(p) });
+        let store = settings.store_dir(&cfg.workspace);
+        match action {
+            CheckpointCmd::Capture { lane, save, accept_database_ahead, note } => {
+                let m = checkpoint::capture(&cfg.workspace, settings, &live, lane, save.as_deref(), *accept_database_ahead, note)?;
+                println!("{}", serde_json::to_string_pretty(&m)?);
+            }
+            CheckpointCmd::Verify { id } => {
+                let m = checkpoint::verify(&store, id, settings)?;
+                println!("verified {} (playthrough {}, save {}, {})", m.id, m.playthrough, m.save.name, m.coherence.state);
+            }
+            CheckpointCmd::List => {
+                for m in checkpoint::list(&store) {
+                    println!("{}\t{}\t{}\t{}\t{}", m.id, m.playthrough, m.coherence.state, m.save.name, m.note);
+                }
+            }
+            CheckpointCmd::Prune { keep, yes } => {
+                for id in checkpoint::prune(&store, settings, *keep, *yes)? {
+                    println!("{} {id}", if *yes { "removed" } else { "would remove" });
+                }
+            }
+            CheckpointCmd::Restore { id, saves, lane } => {
+                let r = checkpoint::restore(&cfg.workspace, settings, &live, id, saves, lane)?;
+                println!("{}", serde_json::to_string_pretty(&r)?);
+            }
+        }
+        return Ok(());
+    }
     let nx = nexus::Nexus::new(Some(&cfg.nexus_key_file))?;
     match cli.cmd {
         Cmd::KeyCheck => {
@@ -381,7 +451,7 @@ fn main() -> Result<()> {
                 println!("{d}");
             }
         }
-        Cmd::Dll { .. } | Cmd::PexDump { .. } | Cmd::PexPatchChim { .. } | Cmd::PexPatchChimSchedule { .. } => unreachable!(),
+        Cmd::Dll { .. } | Cmd::PexDump { .. } | Cmd::PexPatchChim { .. } | Cmd::PexPatchChimSchedule { .. } | Cmd::Checkpoint { .. } => unreachable!(),
     }
     Ok(())
 }

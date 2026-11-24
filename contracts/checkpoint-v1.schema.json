@@ -1,0 +1,172 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:skyrim-awakened:checkpoint:1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "version",
+    "id",
+    "created_at",
+    "playthrough",
+    "note",
+    "save",
+    "database",
+    "coherence",
+    "identity",
+    "labels",
+    "capture_seconds"
+  ],
+  "properties": {
+    "version": {
+      "const": 1
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{8}$"
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "playthrough": {
+      "$ref": "#/$defs/playthrough"
+    },
+    "note": {
+      "type": "string"
+    },
+    "save": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "save",
+        "cosave",
+        "modified_at"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[^/\\\\]+$"
+        },
+        "save": {
+          "$ref": "#/$defs/file"
+        },
+        "cosave": {
+          "$ref": "#/$defs/file"
+        },
+        "modified_at": {
+          "type": "integer"
+        }
+      }
+    },
+    "database": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "lane",
+        "dump",
+        "watermark",
+        "last_event_at",
+        "schema",
+        "tables_sha256"
+      ],
+      "properties": {
+        "lane": {
+          "type": "string"
+        },
+        "dump": {
+          "$ref": "#/$defs/file"
+        },
+        "watermark": {
+          "type": "string"
+        },
+        "last_event_at": {
+          "oneOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "schema": {
+          "type": "string"
+        },
+        "tables_sha256": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/sha256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "coherence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "state",
+        "database_ahead_seconds"
+      ],
+      "properties": {
+        "state": {
+          "enum": [
+            "coherent",
+            "database-ahead"
+          ]
+        },
+        "database_ahead_seconds": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "identity": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/file"
+      }
+    },
+    "labels": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "capture_seconds": {
+      "type": "number",
+      "minimum": 0
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "playthrough": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{32}$"
+    },
+    "file": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sha256",
+        "size"
+      ],
+      "properties": {
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "size": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    }
+  }
+}

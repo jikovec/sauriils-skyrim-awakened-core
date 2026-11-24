@@ -37,6 +37,9 @@ pub struct Config {
     /// Archive admission limits and extractor confinement (`[admission]`).
     #[serde(default)]
     pub admission: crate::admission::Policy,
+    /// Playthrough checkpoint store and database lanes (`[checkpoint]`).
+    #[serde(default)]
+    pub checkpoint: crate::checkpoint::Settings,
 }
 
 fn expand_home(p: &Path) -> PathBuf {

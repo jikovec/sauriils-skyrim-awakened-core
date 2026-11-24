@@ -675,6 +675,7 @@ mod tests {
             downloads_reserve_gb: None,
             // These fixtures must not depend on how full the host filesystem is.
             admission: super::admission::Policy { limits: super::admission::Limits { reserve_bytes: 0, ..Default::default() }, ..Default::default() },
+            checkpoint: Default::default(),
         };
         let entry=serde_json::from_value(serde_json::json!({"key":"dependency-fixture","name":"Dependency fixture","status":"SELECTED"})).unwrap();
         let bytes=fs::read(&archive).unwrap();
@@ -803,7 +804,7 @@ mod tests {
         Ok(())
     }
 
-    use super::admission::testkit::{scratch, tar, Entry};
+    use super::admission::testkit::{conforms, scratch, tar, Entry};
     use super::admission::{ExecClass, Refusal, RefusalCode};
 
     struct Fixture {
@@ -835,6 +836,7 @@ mod tests {
                 downloads_overflow: None,
                 downloads_reserve_gb: None,
                 admission: super::admission::Policy { limits: super::admission::Limits { reserve_bytes: 0, ..Default::default() }, ..Default::default() },
+            checkpoint: Default::default(),
             };
             let entry = serde_json::from_value(serde_json::json!({"key": "fixture", "name": "Fixture mod", "status": "SELECTED"})).unwrap();
             let mut fixture = Fixture { cfg, entry, files: Vec::new(), state: super::State::default(), active: Default::default() };
@@ -1341,56 +1343,6 @@ mod tests {
         assert_eq!(std::fs::read_dir(&outside).unwrap().count(), 0);
         assert!(!f.cfg.workspace.join("backups").exists());
         std::fs::remove_dir_all(outside).unwrap();
-    }
-
-    /// The part of JSON Schema the receipt contract uses, apart from string patterns, which
-    /// the repository's contract verifier checks on the fixtures.
-    fn conforms(root: &serde_json::Value, schema: &serde_json::Value, value: &serde_json::Value) -> Result<(), String> {
-        use serde_json::Value;
-        if let Some(reference) = schema.get("$ref").and_then(Value::as_str) {
-            return conforms(root, &root["$defs"][reference.trim_start_matches("#/$defs/")], value);
-        }
-        if let Some(expected) = schema.get("const") {
-            if expected != value { return Err(format!("{value} is not {expected}")); }
-        }
-        if let Some(options) = schema.get("enum").and_then(Value::as_array) {
-            if !options.contains(value) { return Err(format!("{value} is not one of {options:?}")); }
-        }
-        if let Some(kind) = schema.get("type").and_then(Value::as_str) {
-            let ok = match kind { "string" => value.is_string(), "integer" => value.is_u64() || value.is_i64(), "boolean" => value.is_boolean(), "array" => value.is_array(), "object" => value.is_object(), "null" => value.is_null(), _ => false };
-            if !ok { return Err(format!("{value} is not of type {kind}")); }
-        }
-        if let Some(options) = schema.get("oneOf").and_then(Value::as_array) {
-            if options.iter().filter(|option| conforms(root, option, value).is_ok()).count() != 1 { return Err(format!("{value} matches no single alternative")); }
-        }
-        if let Some(inner) = schema.get("not") {
-            if conforms(root, inner, value).is_ok() { return Err(format!("{value} matches a forbidden shape")); }
-        }
-        if let Some(object) = value.as_object() {
-            for name in schema.get("required").and_then(Value::as_array).into_iter().flatten() {
-                if !object.contains_key(name.as_str().unwrap()) { return Err(format!("missing {name}")); }
-            }
-            let properties = schema.get("properties").and_then(Value::as_object);
-            for (name, member) in object {
-                match properties.and_then(|p| p.get(name)) {
-                    Some(inner) => conforms(root, inner, member).map_err(|e| format!("{name}: {e}"))?,
-                    None if schema.get("additionalProperties") == Some(&Value::Bool(false)) => return Err(format!("unexpected member {name}")),
-                    None => {}
-                }
-            }
-        }
-        if let (Some(items), Some(array)) = (schema.get("items"), value.as_array()) {
-            for (i, item) in array.iter().enumerate() {
-                conforms(root, items, item).map_err(|e| format!("[{i}]: {e}"))?;
-            }
-        }
-        for part in schema.get("allOf").and_then(Value::as_array).into_iter().flatten() {
-            let branch = if conforms(root, &part["if"], value).is_ok() { part.get("then") } else { part.get("else") };
-            if let Some(branch) = branch {
-                conforms(root, branch, value)?;
-            }
-        }
-        Ok(())
     }
 
     #[test]
