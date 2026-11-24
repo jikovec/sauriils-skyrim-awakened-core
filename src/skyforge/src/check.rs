@@ -384,7 +384,7 @@ mod tests {
             let cfg = Config {
                 workspace: root.clone(), manifest: root.join("manifest.toml"), lockfile: root.join("lock.json"), state: root.join("state.json"),
                 downloads: root.join("downloads"), mo2_instance: root.join("mo2"), stock_game: root.join("stock"), profile: "Test".into(),
-                staging: root.join("staging"), nexus_key_file: root.join("unused-key"), tools_bin: root.join("tools"), downloads_overflow: None, downloads_reserve_gb: None,
+                staging: root.join("staging"), nexus_key_file: root.join("unused-key"), tools_bin: root.join("tools"), downloads_overflow: None, downloads_reserve_gb: None, admission: Default::default(),
             };
             let manifest = toml::from_str("[meta]\ngame_domain='skyrimspecialedition'\ngame_id=1704\nruntime='1.6.1170'\n").unwrap();
             let f = Self { root, cfg, manifest };

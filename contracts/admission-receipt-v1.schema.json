@@ -1,0 +1,117 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:skyrim-awakened:admission-receipt:1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "tool", "key", "target", "decided_at", "decision", "archives", "limits", "confinement", "allowed_executables", "executables"],
+  "properties": {
+    "version": {"const": 1},
+    "tool": {"type": "string", "pattern": "^skyforge [0-9]+\\.[0-9]+\\.[0-9]+$"},
+    "key": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"},
+    "target": {"enum": ["Mods", "GameRoot"]},
+    "decided_at": {"type": "string", "format": "date-time"},
+    "decision": {"enum": ["admitted", "unchanged", "refused"]},
+    "refusal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "detail"],
+      "properties": {
+        "code": {
+          "enum": [
+            "unapproved-identity", "digest-mismatch", "archive-changed", "staging-not-owned",
+            "confinement-unavailable", "extraction-failed", "limit-exceeded", "unsupported-entry",
+            "unsafe-path", "ambiguous-path", "unexpected-executable", "activation-mismatch", "error"
+          ]
+        },
+        "detail": {"type": "string"}
+      }
+    },
+    "archives": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["index", "name", "file_name", "source", "provenance", "confidence", "approved_sha256"],
+        "properties": {
+          "index": {"type": "integer", "minimum": 0},
+          "name": {"type": "string"},
+          "file_name": {"type": "string", "pattern": "^[^/\\\\]*$"},
+          "source": {"type": "string"},
+          "mod_id": {"type": "integer", "minimum": 0},
+          "file_id": {"type": "integer", "minimum": 0},
+          "provenance": {"type": "string"},
+          "confidence": {"enum": ["publisher-digest", "source-index", "size-and-archive-check", "first-use", "owner-local", "unclassified"]},
+          "approved_sha256": {"oneOf": [{"$ref": "#/$defs/sha256"}, {"type": "null"}]},
+          "observed_sha256": {"$ref": "#/$defs/sha256"},
+          "size": {"type": "integer", "minimum": 0}
+        }
+      }
+    },
+    "limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["max_entries", "max_total_bytes", "max_file_bytes", "max_path_bytes", "max_depth", "wall_seconds", "cpu_seconds", "reserve_bytes"],
+      "properties": {
+        "max_entries": {"type": "integer", "minimum": 0},
+        "max_total_bytes": {"type": "integer", "minimum": 0},
+        "max_file_bytes": {"type": "integer", "minimum": 0},
+        "max_path_bytes": {"type": "integer", "minimum": 0},
+        "max_depth": {"type": "integer", "minimum": 0},
+        "wall_seconds": {"type": "integer", "minimum": 0},
+        "cpu_seconds": {"type": "integer", "minimum": 0},
+        "reserve_bytes": {"type": "integer", "minimum": 0}
+      }
+    },
+    "confinement": {"type": "string", "pattern": "^(landlock-abi-[0-9]+|none|not-started)$"},
+    "allowed_executables": {"type": "array", "items": {"$ref": "#/$defs/allowed_class"}},
+    "staged": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["entries", "bytes"],
+      "properties": {"entries": {"type": "integer", "minimum": 0}, "bytes": {"type": "integer", "minimum": 0}}
+    },
+    "plan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["files", "bytes", "sha256"],
+      "properties": {"files": {"type": "integer", "minimum": 1}, "bytes": {"type": "integer", "minimum": 0}, "sha256": {"$ref": "#/$defs/sha256"}}
+    },
+    "executables": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "class", "sha256"],
+        "properties": {
+          "path": {"type": "string"},
+          "class": {"enum": ["skse-plugin", "native-library", "program", "script", "disguised"]},
+          "sha256": {"$ref": "#/$defs/sha256"}
+        }
+      }
+    },
+    "activation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["method", "replaced_existing"],
+      "properties": {"method": {"enum": ["rename", "exchange", "replace", "game-root"]}, "replaced_existing": {"type": "boolean"}}
+    }
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"decision": {"const": "refused"}}},
+      "then": {"required": ["refusal"], "not": {"required": ["activation"]}},
+      "else": {"required": ["staged"], "not": {"required": ["refusal"]}}
+    },
+    {
+      "if": {"properties": {"decision": {"const": "admitted"}}},
+      "then": {
+        "required": ["plan", "activation"],
+        "properties": {"archives": {"items": {"required": ["observed_sha256", "size"]}}}
+      }
+    }
+  ],
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "allowed_class": {"enum": ["skse-plugin", "native-library", "program", "script"]}
+  }
+}

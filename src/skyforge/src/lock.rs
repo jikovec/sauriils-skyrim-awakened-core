@@ -186,7 +186,14 @@ pub fn lock(nx: &Nexus, manifest: &Manifest, prev: &Lockfile, keys: &[String]) -
                 files.push(lf);
             }
             Source::Local { path } => {
-                let mut lf = LockedFile::default();
+                // The recorded hash of an owner-placed file is its approval; keep it while
+                // the manifest still names the same path.
+                let mut lf = prev
+                    .entries
+                    .get(&e.key)
+                    .and_then(|v| v.first().cloned())
+                    .filter(|f| f.source == "local" && f.file_name.as_deref() == Some(path.as_str()))
+                    .unwrap_or_default();
                 lf.source = "local".into();
                 lf.display_name = path.clone();
                 lf.file_name = Some(path.clone());
@@ -214,4 +221,30 @@ fn github_asset(nx: &Nexus, repo: &str, tag: &str, asset: &str) -> Result<(Strin
     let size = a["size"].as_u64().unwrap_or(0);
     let digest = a["digest"].as_str().and_then(|d| d.strip_prefix("sha256:")).map(|d| d.to_lowercase());
     Ok((dl, size, digest))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn manifest(path: &str) -> Manifest {
+        toml::from_str(&format!(
+            "[meta]\ngame_domain='skyrimspecialedition'\ngame_id=1704\nruntime='1.6.1170'\n\n[[mod]]\nkey='generated'\nname='Generated output'\nstatus='SELECTED'\nsource={{kind='local',path='{path}'}}\n"
+        ))
+        .unwrap()
+    }
+
+    #[test]
+    fn relocking_keeps_the_approval_of_an_unchanged_local_path() {
+        let nx = Nexus::new(None).unwrap();
+        let mut prev = Lockfile::default();
+        let approved = LockedFile { source: "local".into(), display_name: "out/a.7z".into(), file_name: Some("out/a.7z".into()), sha256: Some("ab".repeat(32)), verified_by: Some("local-hash-recorded".into()), ..Default::default() };
+        prev.entries.insert("generated".into(), vec![approved]);
+        let (same, _) = lock(&nx, &manifest("out/a.7z"), &prev, &[]).unwrap();
+        assert_eq!(same.entries["generated"][0].sha256.as_deref(), Some("ab".repeat(32).as_str()));
+        assert_eq!(same.entries["generated"][0].verified_by.as_deref(), Some("local-hash-recorded"));
+        // A different path is a different file and starts unapproved.
+        let (moved, _) = lock(&nx, &manifest("out/b.7z"), &prev, &[]).unwrap();
+        assert_eq!((moved.entries["generated"][0].sha256.clone(), moved.entries["generated"][0].verified_by.clone()), (None, None));
+    }
 }

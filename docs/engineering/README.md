@@ -4,7 +4,7 @@ Confirm the Git root and remote, identify the assigned Issue, and read its curre
 
 | Area | Owner and starting point | Verification |
 | --- | --- | --- |
-| Skyforge, manifests and install mechanics | Core [source](../../src/skyforge), [portability](https://github.com/jikovec/sauriils-skyrim-awakened-core/issues/7) | [Locked build and tests](development.md) |
+| Skyforge, manifests and install mechanics | Core [source](../../src/skyforge), [archive admission](archive-admission.md), [portability](https://github.com/jikovec/sauriils-skyrim-awakened-core/issues/7) | [Locked build and tests](development.md) |
 | Native SKSE, world actions and quest eligibility | Core [runtime](../architecture/runtime.md); private native maintainer or [Collection](https://github.com/jikovec/sauriils-skyrim-awakened) compatibility owner | Isolated native/quest scenarios and monitored receipts |
 | AI/CHIM, speech, lore and memories | Core [runtime](../architecture/runtime.md) and [data](../architecture/data.md); owner-authorized component checkout | Synthetic schema, disposable SQL, request/delivery trace and audience controls |
 | Simulation, stability and profiling | Core [operations](../architecture/operations.md) | Bounded concurrency, failure/recovery fixtures and an exact private runtime candidate |
