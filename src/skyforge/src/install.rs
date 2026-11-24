@@ -227,7 +227,7 @@ fn plan_archive(
     } else {
         None
     };
-    if let Some(xml_path) = fomod_xml.filter(|_| e.fomod.is_some() || true) {
+    if let Some(xml_path) = fomod_xml {
         let fomod_root = xml_path.parent().and_then(|p| p.parent()).unwrap().to_path_buf();
         let xml = fomod::decode_xml(&std::fs::read(&xml_path)?)?;
         let mc = fomod::ModuleConfig::parse(&xml).with_context(|| format!("parsing {}", xml_path.display()))?;
@@ -495,7 +495,22 @@ mod tests {
         fs::write(source.join("fomod/ModuleConfig.xml"),xml).unwrap();
         let archive=root.join("downloads/fixture.7z");
         assert!(Command::new("7zz").args(["a","-t7z","-mx0","-bd","-bso0","-bsp0"]).arg(&archive).arg(".").current_dir(&source).status().unwrap().success());
-        let cfg=super::Config{workspace:root.clone(),manifest:root.join("mods.toml"),lockfile:root.join("lock.json"),state:root.join("state.json"),downloads:root.join("downloads"),mo2_instance:root.join("mo2"),stock_game:root.join("stock"),profile:"Test".into(),staging:root.join("staging"),nexus_key_file:root.join("unused"),tools_bin:"nix/tools/bin".into(),downloads_overflow:None,downloads_reserve_gb:None};
+        // Resolve extraction tools on PATH, just as fixture creation does.
+        let cfg = super::Config {
+            workspace: root.clone(),
+            manifest: root.join("mods.toml"),
+            lockfile: root.join("lock.json"),
+            state: root.join("state.json"),
+            downloads: root.join("downloads"),
+            mo2_instance: root.join("mo2"),
+            stock_game: root.join("stock"),
+            profile: "Test".into(),
+            staging: root.join("staging"),
+            nexus_key_file: root.join("unused"),
+            tools_bin: std::path::PathBuf::new(),
+            downloads_overflow: None,
+            downloads_reserve_gb: None,
+        };
         let entry=serde_json::from_value(serde_json::json!({"key":"dependency-fixture","name":"Dependency fixture","status":"SELECTED"})).unwrap();
         let bytes=fs::read(&archive).unwrap();
         let locked=super::LockedFile{source:"local".into(),file_name:Some("fixture.7z".into()),display_name:"fixture".into(),sha256:Some(format!("{:x}",super::Sha256::digest(&bytes))),verified_by:Some("local-test-fixture".into()),..Default::default()};
