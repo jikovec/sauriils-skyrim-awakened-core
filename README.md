@@ -6,7 +6,7 @@ The complete intended game combines a curated third-party modlist with a local A
 
 ## Included source
 
-- `src/skyforge/` — Rust Skyforge installer source and Cargo lockfile, as currently maintained for the Linux/Proton/MO2 workflow. Its `Cargo.toml` declares `GPL-3.0-or-later` because of libloot. It is a public-source snapshot whose local absolute CLI defaults were converted to relative defaults. **This edited public snapshot has not been independently built or tested as a portable installer**; the tested v0.0.3 playable profile remains in the separate private workspace.
+- `src/skyforge/` — Rust Skyforge installer source and Cargo lockfile for the Linux/Proton/MO2 workflow. Its `Cargo.toml` declares `GPL-3.0-or-later` because of libloot. The public source snapshot uses relative CLI defaults. Locked source checks and synthetic installer tests are available. Portable installation from public inputs remains unqualified; the documented v0.0.3 profile is in the separate private workspace.
 - `docs/` — the Core architecture, rights boundaries, integration inventory and v0.0.3 verification status.
 
 See [licensing](LICENSING.md) before reusing code or proposing derivative patches. Original code under `src/skyforge` is GPL-3.0-or-later; original documentation is CC BY 4.0. Neither license grants rights in separate third-party mods.
@@ -16,3 +16,7 @@ See [licensing](LICENSING.md) before reusing code or proposing derivative patche
 No Skyrim game assets, Bethesda files, external mod archives, MO2 installation, personal saves, NPC voices/voice models, local CHIM databases, private conversations, credentials, or uncleared CHIM/HerikaServer derivative code. Source-only publication does **not** mean the full v0.0.3 runtime is publicly released or gameplay-qualified.
 
 The exact complete list of third-party references and integration package names is in the [Collection repository](https://github.com/jikovec/sauriils-skyrim-awakened). Contributions of original code or documentation are welcome through pull requests after reading [CONTRIBUTING.md](CONTRIBUTING.md).
+
+## Engineering foundation
+
+Start with [architecture](docs/architecture/README.md), [contributor orientation](docs/engineering/README.md) or [locked development checks](docs/engineering/development.md).

@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:skyrim-awakened:diagnostic-event:1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "event", "request", "producer", "kind", "occurred_at"],
+  "properties": {
+    "version": {"const": 1},
+    "event": {"$ref": "#/$defs/id"},
+    "parent": {"$ref": "#/$defs/id"},
+    "request": {"$ref": "#/$defs/id"},
+    "actor": {"$ref": "#/$defs/id"},
+    "playthrough": {"$ref": "#/$defs/id"},
+    "utterance": {"$ref": "#/$defs/id"},
+    "segment": {"$ref": "#/$defs/id"},
+    "occurred_at": {"type": "string", "format": "date-time"},
+    "game_time": {"type": "number", "minimum": 0},
+    "elapsed_ms": {"type": "integer", "minimum": 0},
+    "producer": {"enum": ["native", "chim", "sql", "inference", "stt", "tts", "playback", "scheduler"]},
+    "kind": {"enum": ["observed", "admitted", "queued", "started", "completed", "failed", "expired", "canceled", "degraded"]}
+  },
+  "dependentRequired": {
+    "actor": ["playthrough"],
+    "segment": ["utterance"],
+    "game_time": ["playthrough"]
+  },
+  "$defs": {
+    "id": {"type": "string", "pattern": "^[a-z][a-z0-9_-]{0,63}$"}
+  }
+}
