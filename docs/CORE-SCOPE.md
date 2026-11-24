@@ -1,5 +1,7 @@
 # Core architecture and publication state (v0.0.3)
 
+This page describes the historical v0.0.3 preview inventory. See the [maintained architecture](architecture/README.md) for current decisions, target interfaces and engineering boundaries.
+
 Our working local project combines:
 - **Skyforge** — Rust installer, pinned archive verification, MO2 configuration and Wine/Proton launch integration.
 - **CHIM native client integration** — hands-free dialogue, proper-name correction, authored dialogue option selection, per-spoken-segment line skipping, audio lifecycle, focus and continuity.
