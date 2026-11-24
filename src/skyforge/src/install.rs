@@ -513,7 +513,7 @@ mod tests {
         };
         let entry=serde_json::from_value(serde_json::json!({"key":"dependency-fixture","name":"Dependency fixture","status":"SELECTED"})).unwrap();
         let bytes=fs::read(&archive).unwrap();
-        let locked=super::LockedFile{source:"local".into(),file_name:Some("fixture.7z".into()),display_name:"fixture".into(),sha256:Some(format!("{:x}",super::Sha256::digest(&bytes))),verified_by:Some("local-test-fixture".into()),..Default::default()};
+        let locked=super::LockedFile{source:"local".into(),file_name:Some("fixture.7z".into()),display_name:"fixture".into(),sha256:Some(hex::encode(super::Sha256::digest(&bytes))),verified_by:Some("local-test-fixture".into()),..Default::default()};
         (cfg,entry,vec![locked],super::State::default())
     }
 
