@@ -110,6 +110,7 @@ def verify_admission():
         "admitted other bytes": ("admitted", lambda r: r["archives"][0].update(observed_sha256="5" * 64)),
         "admitted with a refusal": ("admitted", lambda r: r.update(refusal={"code": "error", "detail": "x"})),
         "allowed disguised executable": ("admitted", lambda r: r["allowed_executables"].append("disguised")),
+        "executable as an extra type": ("admitted", lambda r: r["allowed_extra_types"].append("EXE")),
         "refused without a reason": ("refused", lambda r: r.pop("refusal")),
         "refused yet activated": ("refused", lambda r: r.update(activation={"method": "rename", "replaced_existing": False})),
         "unknown refusal code": ("refused", lambda r: r["refusal"].update(code="ignored")),

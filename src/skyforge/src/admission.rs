@@ -100,6 +100,8 @@ pub enum RefusalCode {
     AmbiguousPath,
     /// Executable content the manifest entry does not allow.
     UnexpectedExecutable,
+    /// A file type that is neither known game data nor allowed by the manifest entry.
+    UnrecognizedContent,
     /// A staged file changed between inspection and activation.
     ActivationMismatch,
     /// An operating error, not a policy decision. The detail says what failed.
@@ -160,7 +162,7 @@ pub fn classify(dest: &str, head: &[u8]) -> Option<ExecClass> {
             .is_some_and(|rest| !rest.contains('/'))
     });
     match ext {
-        "dll" | "asi" | "ocx" | "sys" | "so" | "cpl" | "drv" | "ax" => {
+        "dll" | "asi" | "ocx" | "sys" | "so" | "cpl" | "drv" | "ax" | "xll" => {
             Some(if skse && ext == "dll" {
                 ExecClass::SksePlugin
             } else {
@@ -175,13 +177,184 @@ pub fn classify(dest: &str, head: &[u8]) -> Option<ExecClass> {
         "bat" | "cmd" | "ps1" | "psm1" | "psd1" | "ps1xml" | "psc1" | "vbs" | "vbe" | "vb"
         | "js" | "jse" | "wsf" | "wsh" | "wsc" | "sct" | "hta" | "lnk" | "url" | "scf" | "reg"
         | "inf" | "jar" | "sh" | "py" | "pyw" | "msc" | "chm" | "msh" | "msh1" | "msh2"
-        | "mshxml" | "settingcontent-ms" | "appref-ms" | "application" | "gadget" => {
-            Some(ExecClass::Script)
-        }
+        | "mshxml" | "settingcontent-ms" | "appref-ms" | "application" | "gadget" | "desktop"
+        | "pyc" | "pyo" | "pyz" | "pyzw" | "ws" | "library-ms" | "search-ms" | "ps2" | "lua"
+        | "ts" => Some(ExecClass::Script),
         _ if head.starts_with(b"MZ") || head.starts_with(b"\x7fELF") => Some(ExecClass::Disguised),
         _ if head.starts_with(b"#!") => Some(ExecClass::Script),
         _ => None,
     }
+}
+
+/// File types a Skyrim mod installs as data or documentation. Anything outside this list and
+/// outside the executable classes is refused until the manifest entry names its extension,
+/// so a type nobody reviewed cannot pass by being unknown.
+const GAME_DATA: &[&str] = &[
+    "bak",
+    "bik",
+    "bin",
+    "bk2",
+    "bmp",
+    "bsa",
+    "bto",
+    "btr",
+    "btt",
+    "cfg",
+    "conf",
+    "css",
+    "csv",
+    "dat",
+    "db",
+    "dds",
+    "dlstrings",
+    "docx",
+    "egm",
+    "egt",
+    "esl",
+    "esm",
+    "esp",
+    "example",
+    "exr",
+    "fbx",
+    "flac",
+    "fnt",
+    "fuz",
+    "fx",
+    "fxh",
+    "gfx",
+    "gif",
+    "glsl",
+    "h",
+    "hdr",
+    "hkb",
+    "hkt",
+    "hkx",
+    "hlsl",
+    "hlsli",
+    "htm",
+    "html",
+    "ico",
+    "ilstrings",
+    "ini",
+    "jpeg",
+    "jpg",
+    "json",
+    "jsonc",
+    "kf",
+    "lip",
+    "lod",
+    "log",
+    "lst",
+    "md",
+    "modgroups",
+    "mp3",
+    "nif",
+    "obj",
+    "ogg",
+    "osp",
+    "otf",
+    "pdb",
+    "pdf",
+    "pdn",
+    "pex",
+    "placeholder",
+    "png",
+    "psc",
+    "psd",
+    "rtf",
+    "seq",
+    "strings",
+    "svg",
+    "swf",
+    "tga",
+    "toml",
+    "tri",
+    "tsv",
+    "ttf",
+    "txt",
+    "wav",
+    "webp",
+    "woff",
+    "woff2",
+    "xcf",
+    "xml",
+    "xsd",
+    "xwm",
+    "yaml",
+    "yml",
+];
+
+/// Documentation files that conventionally have no extension.
+const PLAIN_NAMES: &[&str] = &[
+    "authors",
+    "changelog",
+    "copying",
+    "credits",
+    "licence",
+    "license",
+    "notice",
+    "readme",
+];
+
+fn extension(dest: &str) -> (String, String) {
+    let lower = dest.to_lowercase().replace('\\', "/");
+    let name = lower.rsplit('/').next().unwrap_or("").to_owned();
+    let ext = name.rsplit_once('.').map_or("", |(_, e)| e).to_owned();
+    (name, ext)
+}
+
+/// An extension a manifest entry may name in `extra_types`: a plain lower-case extension that
+/// is not one of the executable classes, which have their own rule.
+pub fn safe_type(ext: &str) -> bool {
+    !ext.is_empty()
+        && ext.len() <= 32
+        && ext
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || matches!(b, b'_' | b'-'))
+        && classify(&format!("x.{ext}"), b"").is_none()
+}
+
+/// Refuse planned outputs whose type is not known game data, not an executable class and not
+/// named by the manifest entry.
+pub fn enforce_known_types<'a>(
+    dests: impl Iterator<Item = &'a String>,
+    extra: &[String],
+) -> Result<()> {
+    let mut unknown: Vec<(&String, String)> = dests
+        .filter_map(|dest| {
+            let (name, ext) = extension(dest);
+            let known = if ext.is_empty() {
+                PLAIN_NAMES.contains(&name.as_str())
+            } else {
+                GAME_DATA.contains(&ext.as_str()) || extra.contains(&ext)
+            };
+            (!known).then_some((dest, ext))
+        })
+        .collect();
+    if unknown.is_empty() {
+        return Ok(());
+    }
+    unknown.sort();
+    let mut shown: Vec<String> = unknown.iter().take(5).map(|(d, _)| (*d).clone()).collect();
+    if unknown.len() > shown.len() {
+        shown.push(format!("and {} more", unknown.len() - shown.len()));
+    }
+    let mut need: Vec<&str> = unknown
+        .iter()
+        .map(|(_, e)| e.as_str())
+        .filter(|e| safe_type(e))
+        .collect();
+    need.sort();
+    need.dedup();
+    let advice = if need.is_empty() {
+        "; exclude them on the manifest entry".to_owned()
+    } else {
+        format!("; after review, exclude them or add extra_types = {need:?} to the manifest entry")
+    };
+    refuse(
+        RefusalCode::UnrecognizedContent,
+        format!("{}{advice}", shown.join(", ")),
+    )
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1338,6 +1511,7 @@ pub struct Receipt {
     pub limits: Limits,
     pub confinement: String,
     pub allowed_executables: Vec<ExecClass>,
+    pub allowed_extra_types: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub staged: Option<Staged>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1356,6 +1530,7 @@ impl Receipt {
         target: &str,
         files: &[LockedFile],
         allowed: &[ExecClass],
+        extra_types: &[String],
         policy: &Policy,
     ) -> Self {
         let archives = files
@@ -1390,6 +1565,7 @@ impl Receipt {
             limits: policy.limits.clone(),
             confinement: "not-started".into(),
             allowed_executables: allowed.to_vec(),
+            allowed_extra_types: extra_types.to_vec(),
             staged: None,
             plan: None,
             executables: Vec::new(),
@@ -1579,8 +1755,57 @@ mod tests {
             classify("setup.msix", b"PK\x03\x04"),
             Some(ExecClass::Program)
         );
+        for script in ["a.lua", "a.pyc", "a.desktop", "a.library-ms", "a.ws"] {
+            assert_eq!(
+                classify(script, b"text"),
+                Some(ExecClass::Script),
+                "{script}"
+            );
+        }
+        assert_eq!(
+            classify("addin.xll", b"MZ\x90\0"),
+            Some(ExecClass::NativeLibrary)
+        );
         assert_eq!(classify("textures/a.dds", b"DDS "), None);
         assert_eq!(classify("scripts/a.pex", b"\xfa\x57\xc0\xde"), None);
+    }
+
+    #[test]
+    fn a_type_nobody_reviewed_is_refused_until_the_entry_names_it() {
+        let files = |names: &[&str]| names.iter().map(|n| n.to_string()).collect::<Vec<_>>();
+        let known = files(&[
+            "Fixture.esp",
+            "meshes/a.NIF",
+            "textures/a.dds",
+            "scripts/a.pex",
+            "docs/README",
+            "LICENSE",
+            "interface/a.swf",
+        ]);
+        assert!(enforce_known_types(known.iter(), &[]).is_ok());
+        for odd in [
+            "data/key.pem",
+            "tools/archive.7z",
+            "notes",
+            "meshes/a.nif_",
+            "a.unknowntype",
+        ] {
+            let planned = files(&["Fixture.esp", odd]);
+            let error = enforce_known_types(planned.iter(), &[]).unwrap_err();
+            assert_eq!(code(&error), RefusalCode::UnrecognizedContent, "{odd}");
+            assert!(error.to_string().contains(odd), "{error}");
+        }
+        let planned = files(&["Fixture.esp", "data/key.pem"]);
+        let error = enforce_known_types(planned.iter(), &[])
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains(r#"extra_types = ["pem"]"#), "{error}");
+        assert!(enforce_known_types(planned.iter(), &["pem".to_string()]).is_ok());
+        // An extra type cannot smuggle an executable class past its own rule.
+        for ext in ["exe", "dll", "js", "bat", "lnk", "PEM", "a b", "", "../x"] {
+            assert!(!safe_type(ext), "{ext:?}");
+        }
+        assert!(safe_type("pem") && safe_type("7z") && safe_type("nif_"));
     }
 
     #[test]

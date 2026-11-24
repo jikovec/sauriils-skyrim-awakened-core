@@ -12,7 +12,7 @@ The code is in `src/skyforge/src/admission.rs`. `install.rs` calls it for every 
 4. **Limits.** The extractor has a per-file size limit and a processor-time limit from the kernel. Skyforge stops it when it passes the wall-clock limit, the entry count, the expanded size or the free-space reserve. A stopped extractor is not retried with the next tool.
 5. **Inspection.** Skyforge walks everything the extractor left. Only directories and unshared regular files pass. A symbolic link, a hard link, a device, a pipe or a socket refuses the install. So does a name Windows and Linux read differently (a backslash, a colon, a trailing dot or space, a device name such as `NUL`), and so do two different files that become one path when case is ignored. Directories that differ only by case merge, as they do on Windows.
 6. **Plan.** The existing FOMOD and include/exclude rules select the outputs. A FOMOD rule or a manifest `root` is input from the archive or its configuration, so every planned source must be a file below the extraction root and every planned destination must be made of ordinary names. A rule with `..`, a drive or stream separator, or a Windows device name refuses the install. Skyforge then hashes each selected file once and records one digest for the whole plan.
-7. **Executables.** Each selected output is classified by its destination name and first bytes, after any FOMOD rename. The manifest entry must allow every class it installs. Executable bytes behind a data extension are always refused.
+7. **Content.** Each selected output is classified by its destination name and first bytes, after any FOMOD rename. Executable classes need the manifest entry to allow them, and executable bytes behind a data extension are always refused. Every other output must be a file type Skyrim mods install as data or documentation, or a type the entry names. An unknown type is refused, so a type nobody reviewed cannot pass by being unknown.
 8. **Activation.** A mod folder is assembled beside its destination, each file is confirmed to be the one that was hashed, and the finished folder is exchanged with the old one in a single atomic step. A game-root install checks every file before the first write, backs up what it replaces, writes each file under a temporary name and renames it, and keeps a journal that is completed only after the last file.
 
 Extraction uses `unar` for `.rar` and `7zz` then `unar` for everything else. Either tool may be missing; a missing tool counts as unable to read the archive.
@@ -32,6 +32,7 @@ Extraction uses `unar` for `.rar` and `7zz` then `unar` for everything else. Eit
 | `unsafe-path` | A name that Windows and Linux read differently. |
 | `ambiguous-path` | Two different files behind one caseless path. |
 | `unexpected-executable` | Executable content the manifest entry does not allow. |
+| `unrecognized-content` | A file type that is neither known game data nor named by the manifest entry. |
 | `activation-mismatch` | A staged file changed between inspection and activation. |
 | `error` | An operating error that is not a policy decision. The detail says what failed. |
 
@@ -60,12 +61,13 @@ cpu_seconds = 3600
 reserve_bytes = 1073741824
 ```
 
-A manifest entry allows executable content by class:
+A manifest entry allows executable content by class and names any further file type it installs:
 
 ```toml
 [[mod]]
 key = "example-plugin"
 executables = ["skse-plugin"]
+extra_types = ["pem"]
 ```
 
 | Class | What it covers |
@@ -75,9 +77,11 @@ executables = ["skse-plugin"]
 | `program` | `.exe`, `.com`, `.scr`, `.pif`, `.msi`, `.msp`, `.mst`, `.msu`, `.appx`, `.msix`. |
 | `script` | Host scripts, shortcuts and files a desktop resolves on open: `.bat`, `.cmd`, the PowerShell and Windows Script Host types (`.ps1`, `.vbs`, `.js`, `.wsf` and their variants), `.hta`, `.lnk`, `.url`, `.scf`, `.reg`, `.inf`, `.jar`, `.sh`, `.py`, `.msc`, `.chm` and similar, or a file that starts with `#!`. `classify` in `admission.rs` holds the exact list. |
 
-The extension list names known host-executable types. It is not a list of everything that could ever run, so native code and `#!` are also recognised by their first bytes whatever the name. Web assets such as `.js` inside an interface mod count as `script`; exclude them or allow the class after review.
+The executable lists name known host-executable types and can never be complete. Two rules cover what they miss. Native code and `#!` are recognised by their first bytes whatever the name. And a file whose extension is not in `GAME_DATA` in `admission.rs` is refused as `unrecognized-content` until the entry excludes it or names the extension in `extra_types`. `extra_types` accepts lower-case extensions only and never an executable type. Web and Lua sources inside an interface mod count as `script`; exclude them or allow the class after review.
 
-An existing manifest needs these declarations before an entry with executable content can be installed again. Entries that are already installed and unchanged are not affected.
+A survey of one installed list of 621 mod folders found 72 distinct extensions across 60,692 files, so the known-data list is short and the declarations are few. A game archive (`.bsa`) is admitted as one file. Its contents are not inspected.
+
+An existing manifest needs these declarations before an entry with executable or unrecognized content can be installed again. Entries that are already installed and unchanged are not affected.
 
 ## Local sources
 

@@ -3,7 +3,7 @@
   "$id": "urn:skyrim-awakened:admission-receipt:1",
   "type": "object",
   "additionalProperties": false,
-  "required": ["version", "tool", "key", "target", "decided_at", "decision", "archives", "limits", "confinement", "allowed_executables", "executables"],
+  "required": ["version", "tool", "key", "target", "decided_at", "decision", "archives", "limits", "confinement", "allowed_executables", "allowed_extra_types", "executables"],
   "properties": {
     "version": {"const": 1},
     "tool": {"type": "string", "pattern": "^skyforge [0-9]+\\.[0-9]+\\.[0-9]+$"},
@@ -20,7 +20,8 @@
           "enum": [
             "unapproved-identity", "digest-mismatch", "archive-changed", "staging-not-owned",
             "confinement-unavailable", "extraction-failed", "limit-exceeded", "unsupported-entry",
-            "unsafe-path", "ambiguous-path", "unexpected-executable", "activation-mismatch", "error"
+            "unsafe-path", "ambiguous-path", "unexpected-executable", "unrecognized-content",
+            "activation-mismatch", "error"
           ]
         },
         "detail": {"type": "string"}
@@ -64,6 +65,7 @@
     },
     "confinement": {"type": "string", "pattern": "^(landlock-abi-[0-9]+|none|not-started)$"},
     "allowed_executables": {"type": "array", "items": {"$ref": "#/$defs/allowed_class"}},
+    "allowed_extra_types": {"type": "array", "items": {"type": "string", "pattern": "^[a-z0-9_-]{1,32}$"}},
     "staged": {
       "type": "object",
       "additionalProperties": false,

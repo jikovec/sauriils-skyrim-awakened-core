@@ -325,7 +325,7 @@ pub fn install_one(
     active_files: &HashSet<String>,
     game_version: &str,
 ) -> Result<InstallOutcome> {
-    let mut receipt = admission::Receipt::begin(&e.key, &format!("{:?}", e.target), files, &e.executables, &cfg.admission);
+    let mut receipt = admission::Receipt::begin(&e.key, &format!("{:?}", e.target), files, &e.executables, &e.extra_types, &cfg.admission);
     let result = install_checked(cfg, e, files, state, active_files, game_version, &mut receipt);
     match receipt.finish(&cfg.state, &result) {
         Ok(_) => result,
@@ -464,6 +464,9 @@ fn install_checked(
     }
     receipt.executables.sort_by(|a, b| a.path.cmp(&b.path));
     admission::enforce_executables(&receipt.executables, &e.executables)?;
+    // Everything that is not an executable class must be a known data type or one this entry names.
+    let classed: HashSet<&String> = receipt.executables.iter().map(|r| &r.path).collect();
+    admission::enforce_known_types(display.values().filter(|d| !classed.contains(d)), &e.extra_types)?;
     let planned: Vec<(String, &admission::Proof)> = merged.keys().map(|k| (display[k].clone(), &proofs[k])).collect();
     let plan = admission::PlanRecord { files: planned.len(), bytes: planned.iter().map(|(_, p)| p.size).sum(), sha256: admission::plan_digest(&planned) };
     rec.plan_sha256 = Some(plan.sha256.clone());
@@ -920,6 +923,23 @@ mod tests {
         f.entry.root = Some("../../..".into());
         assert_eq!(f.refused(), RefusalCode::UnsafePath);
         std::fs::remove_dir_all(outside).unwrap();
+    }
+
+    #[test]
+    fn unrecognized_content_needs_the_entry_to_name_its_type() {
+        let archive = tar(&[Entry::File("Fixture.esp", b"x"), Entry::File("SKSE/Plugins/signing.pem", b"-----BEGIN"), Entry::File("docs/README", b"read me")]);
+        let mut f = Fixture::new(&archive);
+        assert_eq!(f.refused(), RefusalCode::UnrecognizedContent);
+        assert!(!f.mod_dir().exists());
+        f.assert_clean();
+        assert_eq!(f.receipts()[0]["refusal"]["code"].as_str(), Some("unrecognized-content"));
+        // The owner can drop the file or accept its type for this entry.
+        f.entry.exclude = vec!["*.pem".into()];
+        assert!(matches!(f.install().unwrap(), super::InstallOutcome::Installed(2)));
+        let mut f = Fixture::new(&archive);
+        f.entry.extra_types = vec!["pem".into()];
+        assert!(matches!(f.install().unwrap(), super::InstallOutcome::Installed(3)));
+        assert_eq!(f.receipts()[0]["allowed_extra_types"][0].as_str(), Some("pem"));
     }
 
     #[test]
