@@ -1,0 +1,62 @@
+{
+  "admitted": {
+    "version": 1,
+    "tool": "skyforge 0.1.0",
+    "key": "fixture-plugin",
+    "target": "Mods",
+    "decided_at": "2026-11-24T13:00:00.000Z",
+    "decision": "admitted",
+    "archives": [
+      {
+        "index": 0,
+        "name": "Fixture plugin",
+        "file_name": "Fixture Plugin-1000-1-0.7z",
+        "source": "nexus",
+        "mod_id": 1000,
+        "file_id": 2000,
+        "provenance": "nexus-md5+size",
+        "confidence": "source-index",
+        "approved_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+        "observed_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+        "size": 4096
+      }
+    ],
+    "limits": {"max_entries": 250000, "max_total_bytes": 68719476736, "max_file_bytes": 17179869184, "max_path_bytes": 1024, "max_depth": 48, "wall_seconds": 3600, "cpu_seconds": 3600, "reserve_bytes": 1073741824},
+    "confinement": "landlock-abi-6",
+    "allowed_executables": ["skse-plugin"],
+    "allowed_extra_types": [],
+    "staged": {"entries": 5, "bytes": 8192},
+    "plan": {"files": 2, "bytes": 6144, "sha256": "2222222222222222222222222222222222222222222222222222222222222222"},
+    "executables": [
+      {"path": "skse/plugins/Fixture.dll", "class": "skse-plugin", "sha256": "3333333333333333333333333333333333333333333333333333333333333333"}
+    ],
+    "activation": {"method": "exchange", "replaced_existing": true}
+  },
+  "refused": {
+    "version": 1,
+    "tool": "skyforge 0.1.0",
+    "key": "fixture-plugin",
+    "target": "Mods",
+    "decided_at": "2026-11-24T13:05:00.000Z",
+    "decision": "refused",
+    "refusal": {"code": "digest-mismatch", "detail": "Fixture Plugin-1000-1-0.7z: approved SHA-256 1111111111111111111111111111111111111111111111111111111111111111, found 4444444444444444444444444444444444444444444444444444444444444444"},
+    "archives": [
+      {
+        "index": 0,
+        "name": "Fixture plugin",
+        "file_name": "Fixture Plugin-1000-1-0.7z",
+        "source": "nexus",
+        "mod_id": 1000,
+        "file_id": 2000,
+        "provenance": "nexus-md5+size",
+        "confidence": "source-index",
+        "approved_sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+      }
+    ],
+    "limits": {"max_entries": 250000, "max_total_bytes": 68719476736, "max_file_bytes": 17179869184, "max_path_bytes": 1024, "max_depth": 48, "wall_seconds": 3600, "cpu_seconds": 3600, "reserve_bytes": 1073741824},
+    "confinement": "not-started",
+    "allowed_executables": ["skse-plugin"],
+    "allowed_extra_types": [],
+    "executables": []
+  }
+}

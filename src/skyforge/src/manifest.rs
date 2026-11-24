@@ -97,6 +97,14 @@ pub struct ModEntry {
     /// Drop paths matching one of these.
     #[serde(default)]
     pub exclude: Vec<String>,
+    /// Executable content this entry may install, by class: "skse-plugin", "native-library",
+    /// "program", "script". Anything executable outside this list refuses the install.
+    #[serde(default)]
+    pub executables: Vec<crate::admission::ExecClass>,
+    /// Further file extensions this entry may install, beyond the game data and documentation
+    /// types skyforge knows. Lower case, without the dot. Executable types are not accepted here.
+    #[serde(default)]
+    pub extra_types: Vec<String>,
     /// Plugins this entry is expected to provide (validated after install).
     #[serde(default)]
     pub plugins: Vec<String>,
@@ -152,6 +160,19 @@ impl Manifest {
             if e.name.contains(['/', '\\', ':', '*', '?', '"', '<', '>', '|']) {
                 bail!("mod name {} contains characters MO2 cannot use", e.name);
             }
+            // The key names staging and receipt directories; the name is a mod folder.
+            if !crate::admission::safe_key(&e.key) {
+                bail!("manifest key {:?} must be letters, digits, '.', '_' or '-' and start with a letter or digit", e.key);
+            }
+            if e.target == Target::Mods && e.status.installs() && !crate::admission::safe_mod_name(&e.name) {
+                bail!("mod name {:?} must be one folder name that does not start with '.' or end with a space or '.'", e.name);
+            }
+            if e.executables.contains(&crate::admission::ExecClass::Disguised) {
+                bail!("{}: disguised executables cannot be allowed", e.key);
+            }
+            if let Some(bad) = e.extra_types.iter().find(|t| !crate::admission::safe_type(t)) {
+                bail!("{}: extra type {bad:?} must be a lower-case extension that is not an executable class", e.key);
+            }
         }
         for e in &self.mods {
             for r in &e.requires {
@@ -182,5 +203,38 @@ impl Manifest {
             .filter(|e| keys.is_empty() || keys.iter().any(|k| k == &e.key))
             .filter(|e| max_phase.map_or(true, |p| e.phase <= p))
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Manifest;
+
+    fn load(entry: &str) -> anyhow::Result<Manifest> {
+        let m: Manifest = toml::from_str(&format!("[meta]\ngame_domain='skyrimspecialedition'\ngame_id=1704\nruntime='1.6.1170'\n\n[[mod]]\n{entry}\n"))?;
+        m.validate()?;
+        Ok(m)
+    }
+
+    #[test]
+    fn keys_names_and_executable_classes_are_validated() {
+        let m = load("key='skse-plugin_1.0'\nname='A plugin'\nstatus='SELECTED'\nexecutables=['skse-plugin','native-library']").unwrap();
+        assert_eq!(m.mods[0].executables.len(), 2);
+        assert!(load("key='plain'\nname='Plain'\nstatus='SELECTED'").unwrap().mods[0].executables.is_empty());
+        assert_eq!(load("key='typed'\nname='Typed'\nstatus='SELECTED'\nextra_types=['pem','7z']").unwrap().mods[0].extra_types, ["pem", "7z"]);
+        for bad in [
+            "key='../escape'\nname='Escape'\nstatus='SELECTED'",
+            "key='a/b'\nname='Slash'\nstatus='SELECTED'",
+            "key='.hidden'\nname='Hidden key'\nstatus='SELECTED'",
+            "key='dot'\nname='.hidden'\nstatus='SELECTED'",
+            "key='trail'\nname='Trailing.'\nstatus='SELECTED'",
+            "key='dots'\nname='..'\nstatus='SELECTED'",
+            "key='disguised'\nname='Disguised'\nstatus='SELECTED'\nexecutables=['disguised']",
+            "key='unknown'\nname='Unknown'\nstatus='SELECTED'\nexecutables=['anything']",
+            "key='typed'\nname='Typed'\nstatus='SELECTED'\nextra_types=['exe']",
+            "key='cased'\nname='Cased'\nstatus='SELECTED'\nextra_types=['PEM']",
+        ] {
+            assert!(load(bad).is_err(), "{bad}");
+        }
     }
 }

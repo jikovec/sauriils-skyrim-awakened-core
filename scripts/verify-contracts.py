@@ -82,6 +82,49 @@ def main():
              "occurred_at": "2026-11-23T11:00:00Z"}
     verify({"events": [event], "receipts": [action]}, event_validator, receipt_validator)
     print("PASS: speech and action correlation, 10 rejection cases")
+    verify_admission()
+
+
+def verify_admission():
+    """Check installer admission receipts and reject ones that claim more than they show."""
+    admission = validator("admission-receipt-v1.schema.json")
+    receipts = read_json("fixtures/admission-receipts.json")
+
+    def check(receipt):
+        admission.validate(receipt)
+        if receipt["decision"] != "refused" and any(
+                archive["approved_sha256"] != archive.get("observed_sha256")
+                for archive in receipt["archives"]):
+            raise ValueError("admitted bytes differ from the approved digest")
+
+    for receipt in receipts.values():
+        check(receipt)
+
+    cases = {
+        "download location": ("admitted", lambda r: r["archives"][0].update(url="https://example.invalid/a?key=1")),
+        "archive path": ("admitted", lambda r: r["archives"][0].update(file_name="downloads/a.7z")),
+        "unknown version": ("admitted", lambda r: r.update(version=2)),
+        "admitted without a plan": ("admitted", lambda r: r.pop("plan")),
+        "admitted without activation": ("admitted", lambda r: r.pop("activation")),
+        "admitted without observed bytes": ("admitted", lambda r: r["archives"][0].pop("observed_sha256")),
+        "admitted other bytes": ("admitted", lambda r: r["archives"][0].update(observed_sha256="5" * 64)),
+        "admitted with a refusal": ("admitted", lambda r: r.update(refusal={"code": "error", "detail": "x"})),
+        "allowed disguised executable": ("admitted", lambda r: r["allowed_executables"].append("disguised")),
+        "executable as an extra type": ("admitted", lambda r: r["allowed_extra_types"].append("EXE")),
+        "refused without a reason": ("refused", lambda r: r.pop("refusal")),
+        "refused yet activated": ("refused", lambda r: r.update(activation={"method": "rename", "replaced_existing": False})),
+        "unknown refusal code": ("refused", lambda r: r["refusal"].update(code="ignored")),
+        "missing limit": ("refused", lambda r: r["limits"].pop("max_entries")),
+    }
+    for name, (base, edit) in cases.items():
+        case = deepcopy(receipts[base])
+        edit(case)
+        try:
+            check(case)
+        except (ValidationError, ValueError):
+            continue
+        raise ValueError(f"accepted invalid admission receipt: {name}")
+    print(f"PASS: admission receipts, {len(cases)} rejection cases")
 
 
 if __name__ == "__main__":

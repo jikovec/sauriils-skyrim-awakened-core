@@ -11,7 +11,7 @@ case "$action" in
         rustc --version
         cargo --version
         cc --version
-        command -v 7zz rustfmt cargo-clippy shellcheck actionlint
+        command -v 7zz unar rustfmt cargo-clippy shellcheck actionlint
         python3 -c 'import jsonschema, yaml'
         ;;
     build)

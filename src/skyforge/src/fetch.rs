@@ -177,21 +177,33 @@ pub enum Outcome {
     Adopted,
 }
 
+/// Record the hash of an owner-placed file. Once a hash is recorded it is the approval:
+/// different bytes are refused until the owner accepts them explicitly.
+pub fn record_local(lf: &mut LockedFile, accept_changed: bool) -> Result<()> {
+    let p = PathBuf::from(lf.file_name.as_deref().unwrap_or_default());
+    if !p.exists() {
+        bail!("local source {} is missing", p.display());
+    }
+    let (m, s, n) = hash_file(&p)?;
+    if let Some(approved) = lf.sha256.as_deref().filter(|approved| *approved != s) {
+        if !accept_changed {
+            bail!("local source {} no longer matches its approved SHA-256 {approved} (now {s}); review it, then rerun fetch with --accept-changed-local and this key", p.display());
+        }
+    }
+    lf.md5 = Some(m);
+    lf.sha256 = Some(s);
+    lf.size = Some(n);
+    lf.verified_by = Some("local-hash-recorded".into());
+    lf.verified_at = Some(chrono::Local::now().to_rfc3339());
+    Ok(())
+}
+
 /// Ensure one locked file is present and verified in the downloads directory.
-pub fn fetch_one(nx: &Nexus, cfg: &Config, domain: &str, mod_name: &str, lf: &mut LockedFile) -> Result<Outcome> {
+pub fn fetch_one(nx: &Nexus, cfg: &Config, domain: &str, mod_name: &str, lf: &mut LockedFile, accept_changed_local: bool) -> Result<Outcome> {
     std::fs::create_dir_all(&cfg.downloads)?;
     match lf.source.as_str() {
         "local" => {
-            let p = PathBuf::from(lf.file_name.as_deref().unwrap_or_default());
-            if !p.exists() {
-                bail!("local source {} is missing", p.display());
-            }
-            let (m, s, n) = hash_file(&p)?;
-            lf.md5 = Some(m);
-            lf.sha256 = Some(s);
-            lf.size = Some(n);
-            lf.verified_by = Some("local-hash-recorded".into());
-            lf.verified_at = Some(chrono::Local::now().to_rfc3339());
+            record_local(lf, accept_changed_local)?;
             Ok(Outcome::AlreadyVerified)
         }
         "url" | "github" => {
@@ -376,4 +388,32 @@ pub fn fix_names(nx: &Nexus, cfg: &Config, domain: &str, mod_name: &str, lf: &mu
     lf.file_name = Some(real.clone());
     write_mo2_meta(&new, domain, lf, mod_name)?;
     Ok(Some(real))
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::admission::testkit::scratch;
+    use crate::lock::LockedFile;
+
+    #[test]
+    fn a_changed_local_source_needs_explicit_acceptance() {
+        let root = scratch("local");
+        let path = root.join("generated.7z");
+        std::fs::write(&path, b"first build").unwrap();
+        let mut lf = LockedFile { source: "local".into(), file_name: Some(path.to_string_lossy().into_owned()), ..Default::default() };
+        super::record_local(&mut lf, false).unwrap();
+        let approved = lf.sha256.clone().unwrap();
+        assert_eq!(lf.verified_by.as_deref(), Some("local-hash-recorded"));
+        // Unchanged bytes verify again without ceremony.
+        super::record_local(&mut lf, false).unwrap();
+        assert_eq!(lf.sha256.as_deref(), Some(approved.as_str()));
+        // Different bytes do not replace the approval silently.
+        std::fs::write(&path, b"second build").unwrap();
+        let error = super::record_local(&mut lf, false).unwrap_err().to_string();
+        assert!(error.contains("--accept-changed-local") && error.contains(&approved), "{error}");
+        assert_eq!(lf.sha256.as_deref(), Some(approved.as_str()));
+        super::record_local(&mut lf, true).unwrap();
+        assert_ne!(lf.sha256.as_deref(), Some(approved.as_str()));
+        std::fs::remove_dir_all(root).unwrap();
+    }
 }

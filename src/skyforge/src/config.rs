@@ -34,6 +34,9 @@ pub struct Config {
     /// Free space (GB) to keep on the primary download filesystem (e.g. for container storage).
     #[serde(default)]
     pub downloads_reserve_gb: Option<f64>,
+    /// Archive admission limits and extractor confinement (`[admission]`).
+    #[serde(default)]
+    pub admission: crate::admission::Policy,
 }
 
 fn expand_home(p: &Path) -> PathBuf {

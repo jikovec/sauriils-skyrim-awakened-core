@@ -10,7 +10,7 @@
     in {
       devShells.${system}.default = mkSourceShell {
         packages = with pkgs; [
-          cargo rustc rustfmt clippy _7zz git pkg-config shellcheck actionlint
+          cargo rustc rustfmt clippy _7zz unar git pkg-config shellcheck actionlint
           (python3.withPackages (p: [ p.jsonschema p.rfc3339-validator p.pyyaml ]))
         ];
       };

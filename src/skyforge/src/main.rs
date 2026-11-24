@@ -1,5 +1,6 @@
 //! skyforge - reproducible, verifiable Skyrim SE mod installation for MO2 on Linux.
 
+mod admission;
 mod check;
 mod config;
 mod fetch;
@@ -36,7 +37,12 @@ enum Cmd {
     /// Resolve manifest sources into the lockfile.
     Lock { #[arg(long, value_delimiter = ',')] keys: Vec<String> },
     /// Download and verify locked files.
-    Fetch { #[arg(long, value_delimiter = ',')] keys: Vec<String>, #[arg(long)] phase: Option<u8> },
+    Fetch {
+        #[arg(long, value_delimiter = ',')] keys: Vec<String>,
+        #[arg(long)] phase: Option<u8>,
+        /// Approve the current bytes of a changed local source. Needs --keys.
+        #[arg(long)] accept_changed_local: bool,
+    },
     /// Rename UUID-named archives to the real Nexus file names (keeps verification).
     FixNames,
     /// Install verified archives into MO2 mod folders / the Stock Game.
@@ -175,7 +181,10 @@ fn main() -> Result<()> {
                 std::process::exit(2);
             }
         }
-        Cmd::Fetch { keys, phase } => {
+        Cmd::Fetch { keys, phase, accept_changed_local } => {
+            if accept_changed_local && keys.is_empty() {
+                bail!("--accept-changed-local approves new bytes and needs the exact --keys it applies to");
+            }
             let man = manifest::Manifest::load(&cfg.manifest)?;
             let mut lf = lock::Lockfile::load(&cfg.lockfile)?;
             let mut failed = Vec::new();
@@ -190,7 +199,7 @@ fn main() -> Result<()> {
                 for i in 0..n {
                     let f = &mut lf.entries.get_mut(&e.key).unwrap()[i];
                     eprintln!("[{}] {} ({})", e.key, f.display_name, f.version.clone().unwrap_or_default());
-                    match fetch::fetch_one(&nx, &cfg, &man.meta.game_domain, &e.name, f) {
+                    match fetch::fetch_one(&nx, &cfg, &man.meta.game_domain, &e.name, f, accept_changed_local) {
                         Ok(fetch::Outcome::AlreadyVerified) => eprintln!("    verified (cached)"),
                         Ok(fetch::Outcome::Downloaded) => eprintln!("    downloaded + verified ({})", f.verified_by.clone().unwrap_or_default()),
                         Ok(fetch::Outcome::Adopted) => eprintln!("    existing archive verified ({})", f.verified_by.clone().unwrap_or_default()),
