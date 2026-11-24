@@ -1,0 +1,12 @@
+{
+  "events": [
+    {"version":1,"event":"native-a","request":"request-1","actor":"actor-1","playthrough":"play-1","producer":"native","kind":"observed","occurred_at":"2026-11-23T11:00:00Z"},
+    {"version":1,"event":"chim-a","parent":"native-a","request":"request-1","actor":"actor-1","playthrough":"play-1","producer":"chim","kind":"admitted","occurred_at":"2026-11-23T11:00:01Z"},
+    {"version":1,"event":"infer-a","parent":"chim-a","request":"request-1","actor":"actor-1","playthrough":"play-1","producer":"inference","kind":"completed","occurred_at":"2026-11-23T11:00:02Z"},
+    {"version":1,"event":"tts-a","parent":"infer-a","request":"request-1","actor":"actor-1","playthrough":"play-1","utterance":"line-1","segment":"segment-1","producer":"tts","kind":"completed","occurred_at":"2026-11-23T11:00:03Z"},
+    {"version":1,"event":"played-a","parent":"tts-a","request":"request-1","actor":"actor-1","playthrough":"play-1","utterance":"line-1","segment":"segment-1","producer":"playback","kind":"completed","occurred_at":"2026-11-23T11:00:04Z"}
+  ],
+  "receipts": [
+    {"version":1,"kind":"utterance","request":"request-1","actor":"actor-1","playthrough":"play-1","utterance":"line-1","state":"completed","evidence":{"source":"playback","event":"played-a"}}
+  ]
+}

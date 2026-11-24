@@ -4,6 +4,8 @@ The `LICENSE` file contains GNU GPL version 3. The copyright holders of the orig
 
 **Original project documentation** (Markdown files in `docs/`, README, CONTRIBUTING and SECURITY to the extent copyrightable and owned by this project) is licensed **CC BY 4.0**; see `LICENSES/CC-BY-4.0.txt`.
 
+Original foundation scripts and source-check configuration are distributed under **GPL-3.0-or-later**. Original foundation Markdown follows the documentation grant. External CI actions retain their upstream licenses.
+
 **Curated factual lists and reference metadata authored by this project** are dedicated under **CC0-1.0**, as detailed in the linked Collection repository; that does not grant rights to any referenced mod. See `LICENSES/CC0-1.0.txt`.
 
 **Other code and assets are not relicensed by this repository.** In particular upstream CHIM/AIAgent/HerikaServer, third-party mod patches, Bethesda game records, FOMOD extracts, art, Papyrus script derivatives, synthetic voice assets, model weights and lore data remain subject to their own authors' licenses and rights. The project does not assert redistribution rights merely because such items appear in the local modlist.

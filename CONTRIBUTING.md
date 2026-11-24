@@ -5,3 +5,5 @@ Open an Issue describing the intended source change; submit focused pull request
 Original Rust contributions to `src/skyforge/` are under **GPL-3.0-or-later**. Original Markdown documentation contributions are under **CC BY 4.0**. Do not submit third-party code or assets without demonstrable permissions and notices. Clearly describe when generative AI was used to produce or modify submitted code or documents.
 
 This is an early public source preview, not a gameplay-qualified support channel. Test on your own isolated profile; never suggest a save-incompatible plugin removal as a drop-in workaround.
+
+Use the [engineering orientation](docs/engineering/README.md), [coordination guide](docs/engineering/coordination.md) and [source-promotion review](docs/engineering/promotion.md) for issue assignment, evidence, cross-repo changes and privacy.
