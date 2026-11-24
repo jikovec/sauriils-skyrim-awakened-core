@@ -11,8 +11,8 @@ The code is in `src/skyforge/src/admission.rs`. `install.rs` calls it for every 
 3. **Confinement.** The extractor runs under a Linux Landlock ruleset. It can write only below its staging directory. It can read the system directories its own program and libraries live in, the archive, and nothing else of the user's: no credential file, save or database. It starts with a minimal environment and cannot create devices, pipes or sockets.
 4. **Limits.** The extractor has a per-file size limit and a processor-time limit from the kernel. Skyforge stops it when it passes the wall-clock limit, the entry count, the expanded size or the free-space reserve. A stopped extractor is not retried with the next tool.
 5. **Inspection.** Skyforge walks everything the extractor left. Only directories and unshared regular files pass. A symbolic link, a hard link, a device, a pipe or a socket refuses the install. So does a name Windows and Linux read differently (a backslash, a colon, a trailing dot or space, a device name such as `NUL`), and so do two different files that become one path when case is ignored. Directories that differ only by case merge, as they do on Windows.
-6. **Plan.** The existing FOMOD and include/exclude rules select the outputs. Skyforge hashes each selected file once and records one digest for the whole plan.
-7. **Executables.** Each selected output is classified by its destination and first bytes. The manifest entry must allow every class it installs. Executable bytes behind a data extension are always refused.
+6. **Plan.** The existing FOMOD and include/exclude rules select the outputs. A FOMOD rule or a manifest `root` is input from the archive or its configuration, so every planned source must be a file below the extraction root and every planned destination must be made of ordinary names. A rule with `..`, a drive or stream separator, or a Windows device name refuses the install. Skyforge then hashes each selected file once and records one digest for the whole plan.
+7. **Executables.** Each selected output is classified by its destination name and first bytes, after any FOMOD rename. The manifest entry must allow every class it installs. Executable bytes behind a data extension are always refused.
 8. **Activation.** A mod folder is assembled beside its destination, each file is confirmed to be the one that was hashed, and the finished folder is exchanged with the old one in a single atomic step. A game-root install checks every file before the first write, backs up what it replaces, writes each file under a temporary name and renames it, and keeps a journal that is completed only after the last file.
 
 Extraction uses `unar` for `.rar` and `7zz` then `unar` for everything else. Either tool may be missing; a missing tool counts as unable to read the archive.
@@ -71,9 +71,11 @@ executables = ["skse-plugin"]
 | Class | What it covers |
 | --- | --- |
 | `skse-plugin` | A `.dll` directly inside `SKSE/Plugins`. |
-| `native-library` | Any other `.dll`, `.asi`, `.ocx`, `.sys` or `.so`. |
-| `program` | `.exe`, `.com`, `.scr`, `.pif`, `.msi`, `.msp`. |
-| `script` | `.bat`, `.cmd`, `.ps1`, `.psm1`, `.vbs`, `.vbe`, `.wsf`, `.wsh`, `.hta`, `.lnk`, `.reg`, `.jar`, `.sh`, or a file that starts with `#!`. |
+| `native-library` | Any other `.dll`, and `.asi`, `.ocx`, `.sys`, `.so`, `.cpl`, `.drv`, `.ax`. |
+| `program` | `.exe`, `.com`, `.scr`, `.pif`, `.msi`, `.msp`, `.mst`, `.msu`, `.appx`, `.msix`. |
+| `script` | Host scripts, shortcuts and files a desktop resolves on open: `.bat`, `.cmd`, the PowerShell and Windows Script Host types (`.ps1`, `.vbs`, `.js`, `.wsf` and their variants), `.hta`, `.lnk`, `.url`, `.scf`, `.reg`, `.inf`, `.jar`, `.sh`, `.py`, `.msc`, `.chm` and similar, or a file that starts with `#!`. `classify` in `admission.rs` holds the exact list. |
+
+The extension list names known host-executable types. It is not a list of everything that could ever run, so native code and `#!` are also recognised by their first bytes whatever the name. Web assets such as `.js` inside an interface mod count as `script`; exclude them or allow the class after review.
 
 An existing manifest needs these declarations before an entry with executable content can be installed again. Entries that are already installed and unchanged are not affected.
 

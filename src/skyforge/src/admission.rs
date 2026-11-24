@@ -160,14 +160,24 @@ pub fn classify(dest: &str, head: &[u8]) -> Option<ExecClass> {
             .is_some_and(|rest| !rest.contains('/'))
     });
     match ext {
-        "dll" | "asi" | "ocx" | "sys" | "so" => Some(if skse && ext == "dll" {
-            ExecClass::SksePlugin
-        } else {
-            ExecClass::NativeLibrary
-        }),
-        "exe" | "com" | "scr" | "pif" | "msi" | "msp" => Some(ExecClass::Program),
-        "bat" | "cmd" | "ps1" | "psm1" | "vbs" | "vbe" | "wsf" | "wsh" | "hta" | "lnk" | "reg"
-        | "jar" | "sh" => Some(ExecClass::Script),
+        "dll" | "asi" | "ocx" | "sys" | "so" | "cpl" | "drv" | "ax" => {
+            Some(if skse && ext == "dll" {
+                ExecClass::SksePlugin
+            } else {
+                ExecClass::NativeLibrary
+            })
+        }
+        "exe" | "com" | "scr" | "pif" | "msi" | "msp" | "mst" | "msu" | "appx" | "msix" => {
+            Some(ExecClass::Program)
+        }
+        // Everything a Windows or Linux desktop runs or resolves on open. A new host script
+        // type belongs here; first bytes catch native code and `#!` behind other names.
+        "bat" | "cmd" | "ps1" | "psm1" | "psd1" | "ps1xml" | "psc1" | "vbs" | "vbe" | "vb"
+        | "js" | "jse" | "wsf" | "wsh" | "wsc" | "sct" | "hta" | "lnk" | "url" | "scf" | "reg"
+        | "inf" | "jar" | "sh" | "py" | "pyw" | "msc" | "chm" | "msh" | "msh1" | "msh2"
+        | "mshxml" | "settingcontent-ms" | "appref-ms" | "application" | "gadget" => {
+            Some(ExecClass::Script)
+        }
         _ if head.starts_with(b"MZ") || head.starts_with(b"\x7fELF") => Some(ExecClass::Disguised),
         _ if head.starts_with(b"#!") => Some(ExecClass::Script),
         _ => None,
@@ -241,6 +251,50 @@ pub fn safe_mod_name(name: &str) -> bool {
         && !name.starts_with('.')
         && !name.ends_with([' ', '.'])
         && !name.chars().any(char::is_control)
+}
+
+/// A FOMOD or manifest path inside an archive: it may not climb out of the archive.
+pub fn check_source(rel: &str) -> Result<()> {
+    if rel.replace('\\', "/").split('/').any(|c| c == "..") {
+        return refuse(
+            RefusalCode::UnsafePath,
+            format!("{rel:?} names a source outside the archive"),
+        );
+    }
+    Ok(())
+}
+
+/// A planned destination below the mod folder or game root: every component an ordinary
+/// name, so it cannot climb out and means the same on Windows and Linux.
+pub fn check_destination(dest: &str) -> Result<()> {
+    for component in dest.split('/') {
+        let why = match component {
+            "" | "." | ".." => Some("a component that is not a name"),
+            name => unsafe_component(name),
+        };
+        if let Some(why) = why {
+            return refuse(
+                RefusalCode::UnsafePath,
+                format!("destination {dest:?}: {why}"),
+            );
+        }
+    }
+    Ok(())
+}
+
+/// A planned source must be a file below the extraction root it was planned from.
+pub fn check_contained(root: &Path, src: &Path) -> Result<()> {
+    let inside = src.strip_prefix(root).is_ok_and(|rest| {
+        rest.components()
+            .all(|c| matches!(c, std::path::Component::Normal(_)))
+    });
+    if !inside {
+        return refuse(
+            RefusalCode::UnsafePath,
+            "the plan names a file outside the extracted archive",
+        );
+    }
+    Ok(())
 }
 
 /// Where an approved archive may be read from: a download root named by the configuration,
@@ -1499,6 +1553,31 @@ mod tests {
         assert_eq!(
             classify("meshes/a.nif", b"\x7fELF"),
             Some(ExecClass::Disguised)
+        );
+        for script in [
+            "a.js",
+            "a.JSE",
+            "a.wsc",
+            "a.url",
+            "a.scf",
+            "a.inf",
+            "a.py",
+            "a.psd1",
+            "a.settingcontent-ms",
+        ] {
+            assert_eq!(
+                classify(script, b"text"),
+                Some(ExecClass::Script),
+                "{script}"
+            );
+        }
+        assert_eq!(
+            classify("panel.cpl", b"MZ\x90\0"),
+            Some(ExecClass::NativeLibrary)
+        );
+        assert_eq!(
+            classify("setup.msix", b"PK\x03\x04"),
+            Some(ExecClass::Program)
         );
         assert_eq!(classify("textures/a.dds", b"DDS "), None);
         assert_eq!(classify("scripts/a.pex", b"\xfa\x57\xc0\xde"), None);

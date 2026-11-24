@@ -122,6 +122,9 @@ fn find_ci(base: &Path, rel: &str) -> Option<PathBuf> {
     }
     let mut cur = base.to_path_buf();
     for comp in rel.split('/') {
+        if comp == ".." {
+            return None;
+        }
         let direct = cur.join(comp);
         if direct.exists() {
             cur = direct;
@@ -211,6 +214,7 @@ fn plan_archive(
         rec.fomod_chosen.extend(res.chosen);
         rec.fomod_defaulted.extend(res.defaulted);
         for fi in res.files {
+            admission::check_source(&fi.source)?;
             let src = find_ci(&fomod_root, &fi.source)
                 .ok_or_else(|| anyhow!("FOMOD source '{}' not found in archive", fi.source))?;
             if fi.folder || src.is_dir() {
@@ -226,7 +230,10 @@ fn plan_archive(
         return Ok(plan);
     }
     let root = match &e.root {
-        Some(r) => find_ci(extracted, &r.replace('\\', "/")).ok_or_else(|| anyhow!("root '{r}' not in archive"))?,
+        Some(r) => {
+            admission::check_source(r)?;
+            find_ci(extracted, &r.replace('\\', "/")).ok_or_else(|| anyhow!("root '{r}' not in archive"))?
+        }
         None => {
             if e.target == Target::GameRoot { extracted.to_path_buf() } else { detect_root(extracted) }
         }
@@ -398,6 +405,9 @@ fn install_checked(
             if dest.is_empty() {
                 continue;
             }
+            // FOMOD and manifest rules name these paths; neither may leave its tree.
+            admission::check_contained(&x, &src)?;
+            admission::check_destination(&dest)?;
             if !e.include.is_empty() && !e.include.iter().any(|p| glob_match(p, &dest)) {
                 continue;
             }
@@ -866,6 +876,59 @@ mod tests {
             assert!(!up.join("traversal.txt").exists(), "escaped to {}", up.display());
         }
         std::fs::remove_dir_all(outside).unwrap();
+    }
+
+    fn fomod(file_rule: &str) -> String {
+        format!(r#"<config><moduleName>Fixture</moduleName><requiredInstallFiles>{file_rule}</requiredInstallFiles></config>"#)
+    }
+
+    #[test]
+    fn fomod_rules_cannot_reach_outside_the_archive_or_the_mod_folder() {
+        // A file the installer could read and move if a rule were followed out of staging.
+        let outside = scratch("fomod-victim");
+        let victim = outside.join("save.ess");
+        let up = "..\\".repeat(12);
+        let cases = [
+            // The source climbs out of the archive to an owner file.
+            format!(r#"<file source="{up}{}" destination="stolen.ess"/>"#, victim.display().to_string().trim_start_matches('/').replace('/', "\\")),
+            r#"<folder source="..\..\..\..\mo2" destination="copied"/>"#.to_string(),
+            // The destination climbs out of the mod folder.
+            r#"<file source="Fixture.esp" destination="..\..\..\escaped.esp"/>"#.to_string(),
+            r#"<file source="Fixture.esp" destination="textures\..\..\..\escaped.esp"/>"#.to_string(),
+            // Names that Windows resolves differently.
+            r#"<file source="Fixture.esp" destination="Fixture.esp:stream"/>"#.to_string(),
+            r#"<file source="Fixture.esp" destination="NUL.esp"/>"#.to_string(),
+        ];
+        for rule in &cases {
+            std::fs::write(&victim, b"owner save").unwrap();
+            let xml = fomod(rule);
+            let mut f = Fixture::new(&tar(&[Entry::File("Fixture.esp", b"x"), Entry::File("fomod/ModuleConfig.xml", xml.as_bytes())]));
+            assert_eq!(f.refused(), RefusalCode::UnsafePath, "{rule}");
+            assert!(!f.mod_dir().exists(), "{rule}");
+            f.assert_clean();
+            assert_eq!(std::fs::read(&victim).unwrap(), b"owner save", "{rule}");
+            assert!(!f.cfg.workspace.join("escaped.esp").exists() && !f.cfg.mo2_instance.join("escaped.esp").exists(), "{rule}");
+            assert_eq!(f.receipts()[0]["refusal"]["code"].as_str(), Some("unsafe-path"));
+        }
+        // An ordinary rule still installs, with the rename it asks for.
+        let xml = fomod(r#"<file source="Fixture.esp" destination="Renamed.esp"/>"#);
+        let mut f = Fixture::new(&tar(&[Entry::File("Fixture.esp", b"x"), Entry::File("fomod/ModuleConfig.xml", xml.as_bytes())]));
+        assert!(matches!(f.install().unwrap(), super::InstallOutcome::Installed(1)));
+        assert!(f.mod_dir().join("Renamed.esp").is_file());
+        // A manifest root may not climb out either.
+        let mut f = Fixture::new(&tar(&[Entry::File("Fixture.esp", b"x")]));
+        f.entry.root = Some("../../..".into());
+        assert_eq!(f.refused(), RefusalCode::UnsafePath);
+        std::fs::remove_dir_all(outside).unwrap();
+    }
+
+    #[test]
+    fn a_fomod_rename_cannot_hide_an_executable_class() {
+        // The destination name decides the class, so a rule cannot rename code into place unseen.
+        let xml = fomod(r#"<file source="readme.txt" destination="SKSE\Plugins\Loader.dll"/>"#);
+        let mut f = Fixture::new(&tar(&[Entry::File("readme.txt", b"MZ\x90\0 code"), Entry::File("fomod/ModuleConfig.xml", xml.as_bytes())]));
+        assert_eq!(f.refused(), RefusalCode::UnexpectedExecutable);
+        assert_eq!(f.receipts()[0]["executables"][0]["class"].as_str(), Some("skse-plugin"));
     }
 
     #[test]
