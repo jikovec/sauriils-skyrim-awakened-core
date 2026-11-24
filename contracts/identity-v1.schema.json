@@ -1,0 +1,260 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:skyrim-awakened:identity:1",
+  "type": "object",
+  "required": ["version", "type"],
+  "properties": {
+    "version": {"const": 1},
+    "type": {"enum": ["playthrough", "load-order", "save", "load", "actor", "quest", "event", "request"]}
+  },
+  "allOf": [
+    {"if": {"properties": {"type": {"const": "playthrough"}}, "required": ["type"]}, "then": {"$ref": "#/$defs/playthrough"}},
+    {"if": {"properties": {"type": {"const": "load-order"}}, "required": ["type"]}, "then": {"$ref": "#/$defs/load-order"}},
+    {"if": {"properties": {"type": {"const": "save"}}, "required": ["type"]}, "then": {"$ref": "#/$defs/save"}},
+    {"if": {"properties": {"type": {"const": "load"}}, "required": ["type"]}, "then": {"$ref": "#/$defs/load"}},
+    {"if": {"properties": {"type": {"const": "actor"}}, "required": ["type"]}, "then": {"$ref": "#/$defs/actor"}},
+    {"if": {"properties": {"type": {"const": "quest"}}, "required": ["type"]}, "then": {"$ref": "#/$defs/quest"}},
+    {"if": {"properties": {"type": {"const": "event"}}, "required": ["type"]}, "then": {"$ref": "#/$defs/event"}},
+    {"if": {"properties": {"type": {"const": "request"}}, "required": ["type"]}, "then": {"$ref": "#/$defs/request"}}
+  ],
+  "$defs": {
+    "hex128": {"type": "string", "pattern": "^[0-9a-f]{32}$"},
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "counter": {"type": "integer", "minimum": 1, "maximum": 9007199254740991},
+    "name": {"type": "string", "minLength": 1, "maxLength": 256, "pattern": "^[^\\u0000-\\u001f\\u007f]+$"},
+    "handle": {"type": "string", "pattern": "^[a-z0-9-]{1,32}$"},
+    "editor-id": {"type": "string", "pattern": "^[\\u0021-\\u007e]{1,255}$"},
+    "epoch": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["session", "load_generation"],
+      "properties": {
+        "session": {"$ref": "#/$defs/hex128"},
+        "load_generation": {"$ref": "#/$defs/counter"}
+      }
+    },
+    "plugin": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["file", "kind"],
+      "properties": {
+        "file": {"type": "string", "pattern": "^(?! )[^\\u0000-\\u001f\\u007f<>:\"/\\\\|?*]{1,251}\\.[eE][sS][mMpPlL]$"},
+        "kind": {"enum": ["full", "light"]},
+        "content": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["algorithm", "digest"],
+          "properties": {
+            "algorithm": {"const": "sha256"},
+            "digest": {"$ref": "#/$defs/sha256"}
+          }
+        },
+        "load_index": {"type": "string"}
+      },
+      "if": {"properties": {"kind": {"const": "light"}}, "required": ["kind"]},
+      "then": {"properties": {"load_index": {"pattern": "^FE[0-9A-F]{3}$"}}},
+      "else": {"properties": {"load_index": {"pattern": "^(?!F[EF])[0-9A-F]{2}$"}}}
+    },
+    "form": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["origin"],
+      "properties": {
+        "origin": {"enum": ["plugin", "dynamic"]},
+        "plugin": {"$ref": "#/$defs/plugin"},
+        "local_form_id": {"type": "string", "pattern": "^[0-9A-F]{6}$"},
+        "runtime_form_id": {"type": "string", "pattern": "^[0-9A-F]{8}$"},
+        "incarnation": {"$ref": "#/$defs/hex128"}
+      },
+      "if": {"properties": {"origin": {"const": "plugin"}}, "required": ["origin"]},
+      "then": {
+        "required": ["plugin", "local_form_id"],
+        "properties": {"runtime_form_id": {"pattern": "^(?!FF)"}},
+        "if": {"properties": {"plugin": {"properties": {"kind": {"const": "light"}}, "required": ["kind"]}}, "required": ["plugin"]},
+        "then": {"properties": {"local_form_id": {"pattern": "^000"}}}
+      },
+      "else": {
+        "required": ["runtime_form_id"],
+        "properties": {"runtime_form_id": {"pattern": "^FF"}},
+        "not": {"anyOf": [{"required": ["plugin"]}, {"required": ["local_form_id"]}]}
+      }
+    },
+    "base": {
+      "allOf": [{"$ref": "#/$defs/form"}],
+      "not": {"required": ["incarnation"]}
+    },
+    "authored-form": {
+      "allOf": [{"$ref": "#/$defs/form"}],
+      "properties": {"origin": {"const": "plugin"}},
+      "not": {"required": ["incarnation"]}
+    },
+    "playthrough": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "type", "id"],
+      "properties": {
+        "version": true,
+        "type": true,
+        "id": {"$ref": "#/$defs/hex128"},
+        "name": {"$ref": "#/$defs/name"}
+      }
+    },
+    "load-order": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "type", "session", "plugins"],
+      "properties": {
+        "version": true,
+        "type": true,
+        "session": {"$ref": "#/$defs/hex128"},
+        "plugins": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 4350,
+          "items": {"allOf": [{"$ref": "#/$defs/plugin"}], "required": ["load_index"]}
+        }
+      }
+    },
+    "save": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "type", "id", "playthrough", "parent", "session", "load_generation"],
+      "properties": {
+        "version": true,
+        "type": true,
+        "id": {"$ref": "#/$defs/hex128"},
+        "playthrough": {"$ref": "#/$defs/hex128"},
+        "parent": {"type": ["string", "null"], "pattern": "^[0-9a-f]{32}$"},
+        "session": {"$ref": "#/$defs/hex128"},
+        "load_generation": {"$ref": "#/$defs/counter"}
+      }
+    },
+    "load": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "type", "playthrough", "session", "load_generation", "save"],
+      "properties": {
+        "version": true,
+        "type": true,
+        "playthrough": {"$ref": "#/$defs/hex128"},
+        "session": {"$ref": "#/$defs/hex128"},
+        "load_generation": {"$ref": "#/$defs/counter"},
+        "save": {"type": ["string", "null"], "pattern": "^[0-9a-f]{32}$"}
+      }
+    },
+    "actor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "type", "playthrough", "reference", "base", "portable"],
+      "properties": {
+        "version": true,
+        "type": true,
+        "playthrough": {"$ref": "#/$defs/hex128"},
+        "reference": {"$ref": "#/$defs/form"},
+        "base": {"$ref": "#/$defs/base"},
+        "portable": {"type": "boolean"},
+        "observed": {"$ref": "#/$defs/epoch"},
+        "name": {"$ref": "#/$defs/name"}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"reference": {"properties": {"origin": {"const": "dynamic"}}, "required": ["origin"]}}, "required": ["reference"]},
+          "then": {"properties": {"portable": {"const": false}}}
+        },
+        {
+          "if": {
+            "properties": {"reference": {"properties": {"origin": {"const": "dynamic"}}, "required": ["origin"], "not": {"required": ["incarnation"]}}},
+            "required": ["reference"]
+          },
+          "then": {"required": ["observed"]}
+        }
+      ]
+    },
+    "quest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "type", "form", "editor_id"],
+      "properties": {
+        "version": true,
+        "type": true,
+        "form": {"$ref": "#/$defs/authored-form"},
+        "editor_id": {"$ref": "#/$defs/editor-id"}
+      }
+    },
+    "event": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "type", "playthrough", "session", "load_generation", "sequence", "digest"],
+      "properties": {
+        "version": true,
+        "type": true,
+        "playthrough": {"$ref": "#/$defs/hex128"},
+        "session": {"$ref": "#/$defs/hex128"},
+        "load_generation": {"$ref": "#/$defs/counter"},
+        "sequence": {"$ref": "#/$defs/counter"},
+        "digest": {"$ref": "#/$defs/sha256"},
+        "subject": {"type": "string", "pattern": "^actor:[0-9a-f]{32}:.{1,400}$"}
+      }
+    },
+    "candidate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reference", "base", "name"],
+      "properties": {
+        "reference": {"$ref": "#/$defs/form"},
+        "base": {"$ref": "#/$defs/base"},
+        "name": {"$ref": "#/$defs/name"},
+        "handle": {"$ref": "#/$defs/handle"}
+      }
+    },
+    "target": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["by"],
+      "properties": {
+        "by": {"enum": ["identity", "key", "name", "quest"]},
+        "reference": {"$ref": "#/$defs/form"},
+        "base": {"$ref": "#/$defs/base"},
+        "name": {"$ref": "#/$defs/name"},
+        "handle": {"$ref": "#/$defs/handle"},
+        "key": {"type": "string", "pattern": "^actor:[0-9a-f]{32}:.{1,400}$"},
+        "form": {"$ref": "#/$defs/authored-form"},
+        "editor_id": {"$ref": "#/$defs/editor-id"}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"by": {"const": "identity"}}, "required": ["by"]},
+          "then": {"required": ["reference", "base"], "not": {"anyOf": [{"required": ["key"]}, {"required": ["form"]}, {"required": ["editor_id"]}]}}
+        },
+        {
+          "if": {"properties": {"by": {"const": "key"}}, "required": ["by"]},
+          "then": {"required": ["key"], "not": {"anyOf": [{"required": ["reference"]}, {"required": ["base"]}, {"required": ["name"]}, {"required": ["form"]}, {"required": ["editor_id"]}]}}
+        },
+        {
+          "if": {"properties": {"by": {"const": "name"}}, "required": ["by"]},
+          "then": {"required": ["name"], "not": {"anyOf": [{"required": ["reference"]}, {"required": ["base"]}, {"required": ["key"]}, {"required": ["form"]}, {"required": ["editor_id"]}]}}
+        },
+        {
+          "if": {"properties": {"by": {"const": "quest"}}, "required": ["by"]},
+          "then": {"required": ["form", "editor_id"], "not": {"anyOf": [{"required": ["reference"]}, {"required": ["base"]}, {"required": ["name"]}, {"required": ["key"]}]}}
+        }
+      ]
+    },
+    "request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "type", "playthrough", "session", "load_generation", "target"],
+      "properties": {
+        "version": true,
+        "type": true,
+        "playthrough": {"$ref": "#/$defs/hex128"},
+        "session": {"$ref": "#/$defs/hex128"},
+        "load_generation": {"$ref": "#/$defs/counter"},
+        "target": {"$ref": "#/$defs/target"},
+        "candidates": {"type": "array", "maxItems": 64, "items": {"$ref": "#/$defs/candidate"}}
+      },
+      "if": {"properties": {"target": {"properties": {"by": {"const": "name"}}, "required": ["by"]}}, "required": ["target"]},
+      "then": {"required": ["candidates"]}
+    }
+  }
+}
