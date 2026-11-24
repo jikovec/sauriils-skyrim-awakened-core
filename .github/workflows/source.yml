@@ -10,7 +10,7 @@ concurrency:
   cancel-in-progress: true
 jobs:
   verify:
-    name: Core source and contracts
+    name: Core source and contracts (renamed)
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     env:
